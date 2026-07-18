@@ -1,89 +1,81 @@
 # OhMyCopy 自动化测试说明
 
-对应实现版本：**v0.1.34**。
+对应实现版本：**v0.1.35+**。
 
-## 我能自动测什么
+## 默认原则：一次跑全量
 
-| 类型 | 是否需要 VM | 覆盖内容 | 命令 |
-|------|-------------|----------|------|
-| 单元测试 | 否 | 协议、鉴权、历史、inbox、配置、clients | `cargo test --lib` |
-| Hub 端到端 | 否 | 双节点配对、文本/图片/文件/文件夹、大文件、ignore、unpair、错密码 | `cargo test --test hub_pair_e2e` |
-| 大文件 | 否 | 默认 8MiB；可调 | `$env:OHMYCOPY_E2E_LARGE_MB=20; cargo test --test hub_pair_e2e hub_large_file_sync` |
-| 真机剪贴板 | **2 台 Windows**（本机+VM） | OS 剪贴板（文本双向、图/文件/文件夹 HDROP） | `python scripts/vm_ssh_smoke.py` |
-
-**GUI / 托盘点击** 需桌面会话；协议与配对层用 hub 测试覆盖。
-
-## 一键本地
+**推荐入口**（本地全量，含文本/图/文件/文件夹/大文件）：
 
 ```powershell
 cd D:\myrepo\code\rust\OhMyCopy
 powershell -ExecutionPolicy Bypass -File scripts\run_auto_tests.ps1
+```
 
-# 加大文件用例（例如 20 MiB）
+脚本**始终**执行：
+
+| 层级 | 覆盖 |
+|------|------|
+| `cargo test --release --tests --lib` | 全部单元 + 集成 |
+| hub 矩阵（显式过滤，日志清晰） | 文本+图+文件、**大文件**、**文件夹/大文件夹**、反向、ignore、unpair、鉴权失败、超限 |
+| VM smoke（有环境变量或 `-VmSmoke`） | 真剪贴板：文本双向、图、文件、大文件、文件夹 HDROP |
+
+大文件默认 `OHMYCOPY_E2E_LARGE_MB=8`；加大：
+
+```powershell
 $env:OHMYCOPY_E2E_LARGE_MB = "20"
 powershell -ExecutionPolicy Bypass -File scripts\run_auto_tests.ps1 -Large
 ```
 
-## 本地测试清单
+## 本机 + 虚拟机（发版前）
 
-| 套件 | 覆盖 |
-|------|------|
-| `lib` | auth、engine 去重/回声抑制、config、clients ignore、history、inbox zip、discover |
-| `hub_pair_e2e` | 配对、文本/图/文件、文件夹 zip 解压、大文件/大文件夹、B→A、ignore、unpair、超限、错密码 |
-| `settings_and_clients` | 配置字段、clients JSON、历史预览、inbox 收据、PNG 往返 |
-| `protocol_sync` / `e2e_sync` | Hello/Unpair/Clipboard、发现包、双端鉴权+剪贴板帧 |
-
-```powershell
-cargo test --release --tests --lib
-cargo test --release --test hub_pair_e2e hub_large -- --nocapture
-```
-
-## 虚拟机真实剪贴板（推荐：SSH + schtasks）
-
-前提：VM 开启 SSH；用户已登录**控制台会话**；本机与 VM 同局域网。
+设置好三个环境变量后，**同一脚本会自动接上 VM smoke**（不必再记第二个命令）：
 
 ```powershell
 $env:OHMYCOPY_VM_HOST = "192.168.75.201"
 $env:OHMYCOPY_VM_USER = "NRC"
-$env:OHMYCOPY_VM_PASSWORD = "你的密码"   # 勿提交到仓库
-$env:OHMYCOPY_E2E_LARGE_MB = "8"        # 可选，默认 8
-python scripts\vm_ssh_smoke.py
+$env:OHMYCOPY_VM_PASSWORD = "你的密码"   # 勿提交仓库
+# 可选：$env:OHMYCOPY_E2E_LARGE_MB = "8"
+powershell -ExecutionPolicy Bypass -File scripts\run_auto_tests.ps1
+# 或强制要求 VM：
+# powershell -ExecutionPolicy Bypass -File scripts\run_auto_tests.ps1 -VmSmoke -RequireVm
 ```
 
-脚本会：编译 release + `clip_probe` → 部署到 VM `C:\OhMyCopyE2E\` → `schtasks /IT` 在会话 1 启动 headless → 验证：
+VM 前提：SSH 可用；用户已登录**控制台会话**；脚本用 `schtasks /IT`（勿用 Session 0）。
 
-1. 文本 本机→VM（VM `history.db`）  
-2. 文本 VM→本机（`clip_probe` + bat + schtasks /IT）  
-3. 图片 本机→VM（inbox `*.png`）  
-4. 小文件 本机→VM（256KiB）  
-5. 大文件 本机→VM（默认 8MiB，唯一文件名校验）  
-6. 文件夹 本机→VM（`clip_probe set-folder` → OS HDROP → zip 解压校验）  
+### VM smoke 用例清单
 
-> **不要用 Session 0 的 `Start-Process` 跑 headless 做剪贴板测试**——读不到交互桌面剪贴板。
+1. 文本 本机→VM  
+2. 文本 VM→本机  
+3. 图片 本机→VM  
+4. 小文件 本机→VM  
+5. 大文件 本机→VM（`OHMYCOPY_E2E_LARGE_MB`，默认 8）  
+6. 文件夹 本机→VM（`clip_probe set-folder` → OS HDROP）  
 
-辅助脚本：`examples/clip_probe.rs`（`set-text` / `set-file` / `set-folder` / `set-image-png`）。  
-调试用 `scripts/vm_debug_*.py` 不必进发版流水线。
+也可单独跑：`python scripts\vm_ssh_smoke.py`
 
-### WinRM 备选
+## 仅 cargo（等价本地全量）
 
 ```powershell
-$env:OHMYCOPY_VM_HOST = "192.168.75.201"
-$env:OHMYCOPY_VM_USER = "Administrator"
-powershell -ExecutionPolicy Bypass -File scripts\run_auto_tests.ps1 -RemoteVm
+cargo test --release --tests --lib
 ```
 
-WinRM 仅部署对端；真剪贴板仍建议用 `vm_ssh_smoke.py`。
-
-## 日常开发建议
-
-| 改动 | 先跑 |
+| 套件 | 覆盖 |
 |------|------|
-| 协议 / 超时 / 大文件 | `hub_pair_e2e` |
-| 配置 / clients / inbox | `settings_and_clients` + `--lib` |
-| 系统剪贴板格式 | `vm_ssh_smoke.py` 或本机手动 |
-| UI / 托盘 | 本机手动 |
+| lib | auth、engine、config、clients、history、inbox、discover |
+| hub_pair_e2e | 配对、文本/图/文件、文件夹、大文件、反向、ignore、unpair、鉴权… |
+| settings_and_clients | 配置、历史预览、inbox、PNG |
+| protocol_sync / e2e_sync | 协议帧、发现包、鉴权+剪贴板 |
+
+## 日常建议
+
+| 场景 | 命令 |
+|------|------|
+| 日常改代码 | `scripts\run_auto_tests.ps1` |
+| 发版 / 剪贴板回归 | 配好 `OHMYCOPY_VM_*` 后跑同一脚本 |
+| 只要协议大文件 | `$env:OHMYCOPY_E2E_LARGE_MB=20; cargo test --release --test hub_pair_e2e hub_large_file_sync` |
 
 ## 说明
 
-- Hub e2e **不经过** arboard，只验证配对与加密传输（可 CI）。  
-- 系统剪贴板格式（PixPin/微信/资源管理器）依赖 OS 会话；协议与格式增强见 0.1.32+。  
+- Hub e2e **不经过** arboard，验证配对与加密传输。  
+- VM smoke 验证 **真实 OS 剪贴板**（需交互会话）。  
+- GUI/托盘点击仍需人工或 computer-use。  
