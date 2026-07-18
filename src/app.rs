@@ -1554,6 +1554,7 @@ impl eframe::App for AppShell {
         }
 
         self.inner.ui.cmd_save_settings = false;
+        self.inner.ui.cmd_open_config_folder = false;
         self.inner.ui.cmd_add_manual = false;
         self.inner.ui.cmd_connect_nearby = None;
         self.inner.ui.cmd_remove_client = None;
@@ -1594,6 +1595,19 @@ impl eframe::App for AppShell {
                 max_payload: mb * 1024 * 1024,
                 start_minimized_to_tray: self.inner.ui.start_minimized_to_tray,
             });
+        }
+        // Note: cmd_open_config_folder is cleared at frame start; capture after update.
+        if self.inner.ui.cmd_open_config_folder {
+            match Config::open_config_folder() {
+                Ok(()) => {
+                    self.inner.ui.toast = Some("已打开配置文件夹".into());
+                    self.inner.ui.toast_ttl_frames = TOAST_FRAMES;
+                }
+                Err(e) => {
+                    self.inner.ui.toast = Some(format!("无法打开配置文件夹: {e}"));
+                    self.inner.ui.toast_ttl_frames = TOAST_FRAMES;
+                }
+            }
         }
         if self.inner.ui.cmd_add_manual {
             if let Ok(addr) = self.inner.ui.manual_addr.parse::<SocketAddr>() {

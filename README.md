@@ -62,18 +62,22 @@ ohmycopy.exe
 
 Windows 上 headless 若需读写**桌面剪贴板**，请在已登录的交互会话启动（例如计划任务 `/IT`），避免 Session 0。
 
-### 配置布局（便携）
+### 配置与数据目录
 
-配置文件在 **exe 同目录**（非必须 `%APPDATA%`）：
+配置与收件箱统一在用户主目录下的 **`.ohmycopy`**（Windows / Linux 相同约定）：
 
 ```text
-OhMyCopy/
-  ohmycopy.exe
+Windows:  C:\Users\<你>\.ohmycopy\
+Linux:    ~/.ohmycopy/
+
   config.json      # 名称、端口、密码、上限、console、托盘启动等
   clients.json     # 已配对客户端；启动后自动连接（可 ignored 静音）
   history.db       # 剪贴板历史
   inbox/           # 收到的文件/图片/文件夹解压收据目录
 ```
+
+设置页可点 **「打开配置文件夹」**。  
+若曾使用 exe 同目录或 `%APPDATA%\OhMyCopy` 布局，首次启动会尽量迁移到 `~/.ohmycopy`。
 
 | 字段 | 说明 |
 |------|------|

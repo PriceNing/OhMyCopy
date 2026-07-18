@@ -49,6 +49,8 @@ pub struct UiState {
     pub toast_ttl_frames: u32,
     theme: GlassTheme,
     pub cmd_save_settings: bool,
+    /// Open ~/.ohmycopy in the system file manager.
+    pub cmd_open_config_folder: bool,
     pub cmd_add_manual: bool,
     /// Connect discovered (trial): (device_id, name, addr) — clients only after auth OK.
     pub cmd_connect_nearby: Option<(String, String, String)>,
@@ -88,6 +90,7 @@ impl Default for UiState {
             toast_ttl_frames: 0,
             theme: GlassTheme::dark(),
             cmd_save_settings: false,
+            cmd_open_config_folder: false,
             cmd_add_manual: false,
             cmd_connect_nearby: None,
             cmd_remove_client: None,
@@ -800,16 +803,29 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
         );
 
         ui.add_space(16.0);
-        if ui
-            .add(
-                egui::Button::new("保存设置")
-                    .fill(t.accent.gamma_multiply(0.5))
-                    .min_size(egui::vec2(120.0, 32.0)),
-            )
-            .clicked()
-        {
-            state.cmd_save_settings = true;
-        }
+        ui.horizontal(|ui| {
+            if ui
+                .add(
+                    egui::Button::new("保存设置")
+                        .fill(t.accent.gamma_multiply(0.5))
+                        .min_size(egui::vec2(120.0, 32.0)),
+                )
+                .clicked()
+            {
+                state.cmd_save_settings = true;
+            }
+            if ui
+                .add(
+                    egui::Button::new("打开配置文件夹")
+                        .fill(t.card)
+                        .min_size(egui::vec2(140.0, 32.0)),
+                )
+                .on_hover_text("打开 ~/.ohmycopy（配置、历史、inbox）")
+                .clicked()
+            {
+                state.cmd_open_config_folder = true;
+            }
+        });
 
         ui.add_space(12.0);
         ui.separator();
@@ -822,12 +838,13 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
             .color(t.warning),
         );
         ui.add_space(4.0);
+        let cfg_hint = crate::config::Config::config_dir()
+            .map(|p| format!("数据目录：{}  （config.json · clients.json · history.db · inbox/）", p.display()))
+            .unwrap_or_else(|_| "数据目录：~/.ohmycopy".into());
         ui.label(
-            egui::RichText::new(
-                "配置文件与 exe 同目录：config.json · clients.json · history.db",
-            )
-            .small()
-            .color(t.text_muted),
+            egui::RichText::new(cfg_hint)
+                .small()
+                .color(t.text_muted),
         );
     });
 }

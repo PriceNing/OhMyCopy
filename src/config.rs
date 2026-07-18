@@ -78,16 +78,16 @@ impl Config {
         Self::is_insecure_default_password(&self.password)
     }
 
-    /// Directory of the running executable (portable layout).
-    /// Falls back to process current directory if `current_exe` is unavailable.
+    /// User data directory: `~/.ohmycopy` on Windows and Linux
+    /// (e.g. `C:\Users\<name>\.ohmycopy`, `/home/<name>/.ohmycopy`).
     pub fn config_dir() -> Result<PathBuf> {
-        if let Some(dir) = exe_dir() {
-            return Ok(dir);
-        }
-        std::env::current_dir().context("cannot resolve working directory")
+        let dir = home_dir()?.join(".ohmycopy");
+        fs::create_dir_all(&dir)
+            .with_context(|| format!("create config dir {}", dir.display()))?;
+        Ok(dir)
     }
 
-    /// Same as config_dir — keep history next to the exe for easy management.
+    /// Same as config_dir (history / inbox live next to config).
     pub fn data_dir() -> Result<PathBuf> {
         Self::config_dir()
     }
@@ -96,12 +96,21 @@ impl Config {
         Ok(Self::config_dir()?.join("config.json"))
     }
 
-    pub fn legacy_toml_path() -> Result<PathBuf> {
-        Ok(Self::config_dir()?.join("config.toml"))
-    }
-
     pub fn clients_path() -> Result<PathBuf> {
         Ok(Self::config_dir()?.join("clients.json"))
+    }
+
+    /// Open `~/.ohmycopy` in the system file manager (Explorer / xdg-open / open).
+    pub fn open_config_folder() -> Result<()> {
+        let dir = Self::config_dir()?;
+        open_path_in_file_manager(&dir)
+            .with_context(|| format!("open folder {}", dir.display()))?;
+        Ok(())
+    }
+
+    /// Old portable layout: next to the executable.
+    fn legacy_exe_dir() -> Option<PathBuf> {
+        exe_dir()
     }
 
     /// Old installs used `%APPDATA%/OhMyCopy/OhMyCopy/` (or XDG config).
@@ -147,61 +156,45 @@ impl Config {
     fn load_or_create_inner() -> Result<Self> {
         let json_path = Self::config_path()?;
 
-        // Migrate from older config.toml next to exe.
-        let toml_path = Self::legacy_toml_path()?;
-        if toml_path.exists() {
-            let text = fs::read_to_string(&toml_path)
-                .with_context(|| format!("read legacy {}", toml_path.display()))?;
-            let mut cfg: Config = toml::from_str(&text).context("parse config.toml")?;
-            cfg.normalize();
-            cfg.persist_complete()?;
-            tracing::info!(
-                from = %toml_path.display(),
-                to = %json_path.display(),
-                "migrated config.toml → config.json"
-            );
-            return Ok(cfg);
-        }
-
-        // Migrate from previous AppData location if present.
-        if let Some(legacy_dir) = Self::legacy_appdata_dir() {
-            let legacy_json = legacy_dir.join("config.json");
-            let legacy_toml = legacy_dir.join("config.toml");
-            if legacy_json.exists() {
-                let mut cfg = Self::load(&legacy_json)?;
+        // 1) Portable layout next to exe (previous default).
+        if let Some(exe) = Self::legacy_exe_dir() {
+            if let Some(cfg) = Self::try_migrate_from_dir(&exe, "exe directory")? {
+                return Ok(cfg);
+            }
+            let toml_path = exe.join("config.toml");
+            if toml_path.exists() {
+                let text = fs::read_to_string(&toml_path)
+                    .with_context(|| format!("read legacy {}", toml_path.display()))?;
+                let mut cfg: Config = toml::from_str(&text).context("parse config.toml")?;
+                cfg.normalize();
                 cfg.persist_complete()?;
-                let legacy_clients = legacy_dir.join("clients.json");
-                if legacy_clients.exists() {
-                    let dest = Self::clients_path()?;
-                    if !dest.exists() {
-                        let _ = fs::copy(&legacy_clients, &dest);
-                    }
-                }
-                let old_hist = legacy_dir.join("history.db");
-                if old_hist.exists() {
-                    if let Ok(dest) = Self::data_dir().map(|d| d.join("history.db")) {
-                        if !dest.exists() {
-                            let _ = fs::copy(&old_hist, &dest);
-                        }
-                    }
-                }
+                Self::migrate_sidecar_files(&exe);
                 tracing::info!(
-                    from = %legacy_json.display(),
+                    from = %toml_path.display(),
                     to = %json_path.display(),
-                    "migrated AppData config.json → exe directory"
+                    "migrated exe config.toml → ~/.ohmycopy/config.json"
                 );
                 return Ok(cfg);
             }
+        }
+
+        // 2) Previous AppData / XDG location.
+        if let Some(legacy_dir) = Self::legacy_appdata_dir() {
+            if let Some(cfg) = Self::try_migrate_from_dir(&legacy_dir, "AppData/XDG")? {
+                return Ok(cfg);
+            }
+            let legacy_toml = legacy_dir.join("config.toml");
             if legacy_toml.exists() {
                 let text = fs::read_to_string(&legacy_toml)
                     .with_context(|| format!("read legacy {}", legacy_toml.display()))?;
                 let mut cfg: Config = toml::from_str(&text).context("parse legacy config.toml")?;
                 cfg.normalize();
                 cfg.persist_complete()?;
+                Self::migrate_sidecar_files(&legacy_dir);
                 tracing::info!(
                     from = %legacy_toml.display(),
                     to = %json_path.display(),
-                    "migrated AppData config.toml → exe directory config.json"
+                    "migrated AppData config.toml → ~/.ohmycopy/config.json"
                 );
                 return Ok(cfg);
             }
@@ -209,9 +202,60 @@ impl Config {
 
         let mut cfg = Self::default();
         cfg.persist_complete()?;
-        tracing::info!(path = %json_path.display(), "created default config.json (next to exe)");
+        tracing::info!(
+            path = %json_path.display(),
+            "created default config.json under ~/.ohmycopy"
+        );
         Ok(cfg)
     }
+
+    /// If `dir/config.json` exists, load it into `~/.ohmycopy` and copy sidecars.
+    fn try_migrate_from_dir(dir: &Path, label: &str) -> Result<Option<Self>> {
+        let legacy_json = dir.join("config.json");
+        if !legacy_json.exists() {
+            return Ok(None);
+        }
+        // Avoid treating ~/.ohmycopy as a "legacy" source of itself.
+        if let Ok(home_cfg) = Self::config_dir() {
+            if same_dir(dir, &home_cfg) {
+                return Ok(None);
+            }
+        }
+        let mut cfg = Self::load(&legacy_json)?;
+        cfg.persist_complete()?;
+        Self::migrate_sidecar_files(dir);
+        tracing::info!(
+            from = %legacy_json.display(),
+            to = %Self::config_path()?.display(),
+            %label,
+            "migrated config.json → ~/.ohmycopy"
+        );
+        Ok(Some(cfg))
+    }
+
+    /// Copy clients.json, history.db, inbox/ into ~/.ohmycopy when missing.
+    fn migrate_sidecar_files(from_dir: &Path) {
+        let Ok(dest_dir) = Self::config_dir() else {
+            return;
+        };
+        for name in ["clients.json", "history.db", "history.db-wal", "history.db-shm"] {
+            let src = from_dir.join(name);
+            let dest = dest_dir.join(name);
+            if src.is_file() && !dest.exists() {
+                if let Err(e) = fs::copy(&src, &dest) {
+                    tracing::warn!(error = %e, from = %src.display(), "migrate sidecar failed");
+                }
+            }
+        }
+        let src_inbox = from_dir.join("inbox");
+        let dest_inbox = dest_dir.join("inbox");
+        if src_inbox.is_dir() && !dest_inbox.exists() {
+            if let Err(e) = copy_dir_recursive(&src_inbox, &dest_inbox) {
+                tracing::warn!(error = %e, "migrate inbox failed");
+            }
+        }
+    }
+
 
     fn normalize(&mut self) {
         if self.config_version < CONFIG_VERSION {
@@ -278,7 +322,25 @@ impl Config {
     }
 }
 
-/// Directory of the running executable (portable install root).
+/// User home directory (`USERPROFILE` / `HOME` / directories crate).
+fn home_dir() -> Result<PathBuf> {
+    if let Ok(h) = std::env::var("USERPROFILE") {
+        if !h.trim().is_empty() {
+            return Ok(PathBuf::from(h));
+        }
+    }
+    if let Ok(h) = std::env::var("HOME") {
+        if !h.trim().is_empty() {
+            return Ok(PathBuf::from(h));
+        }
+    }
+    if let Some(ud) = directories::UserDirs::new() {
+        return Ok(ud.home_dir().to_path_buf());
+    }
+    anyhow::bail!("cannot resolve user home directory")
+}
+
+/// Directory of the running executable (legacy portable layout).
 fn exe_dir() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?.to_path_buf();
@@ -286,6 +348,61 @@ fn exe_dir() -> Option<PathBuf> {
         return None;
     }
     Some(dir)
+}
+
+fn same_dir(a: &Path, b: &Path) -> bool {
+    let ca = fs::canonicalize(a).unwrap_or_else(|_| a.to_path_buf());
+    let cb = fs::canonicalize(b).unwrap_or_else(|_| b.to_path_buf());
+    ca == cb
+}
+
+fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
+    fs::create_dir_all(dest)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let from = entry.path();
+        let to = dest.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else if ty.is_file() {
+            fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
+/// Open a folder in Explorer / xdg-open / Finder.
+pub fn open_path_in_file_manager(path: &Path) -> Result<()> {
+    #[cfg(windows)]
+    {
+        std::process::Command::new("explorer")
+            .arg(path)
+            .spawn()
+            .context("spawn explorer")?;
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(path)
+            .spawn()
+            .context("spawn open")?;
+        return Ok(());
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .context("spawn xdg-open")?;
+        return Ok(());
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = path;
+        anyhow::bail!("open folder not supported on this platform");
+    }
 }
 
 /// Random shared-password for new installs (`omc-` + 16 alnum chars).
@@ -367,6 +484,13 @@ mod tests {
         let fresh = Config::default();
         assert!(!Config::is_insecure_default_password(&fresh.password));
         assert!(fresh.password.starts_with("omc-"));
+    }
+
+    #[test]
+    fn config_dir_is_dot_ohmycopy_under_home() {
+        let dir = Config::config_dir().unwrap();
+        assert!(dir.ends_with(".ohmycopy"), "dir={}", dir.display());
+        assert!(dir.is_dir());
     }
 
     #[test]

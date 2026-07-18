@@ -72,7 +72,9 @@ OhMyCopy $Version — 局域网剪贴板同步（便携版）
 1. 将本目录拷到任意位置，双击 ohmycopy.exe
 2. 两台电脑设置相同「共享密码」（勿使用空密码或 change-me）
 3. 设备页连接对方 IP:3721，或等待发现后点连接
-4. 配置自动写在 exe 同目录：config.json / clients.json / history.db / inbox/
+4. 配置在用户目录 ~/.ohmycopy（Windows: 用户文件夹\.ohmycopy）：
+   config.json / clients.json / history.db / inbox/
+   设置页可「打开配置文件夹」
 
 防火墙：放行 TCP/UDP 3721
 无界面：ohmycopy.exe --headless

@@ -1,4 +1,4 @@
-//! Received file/folder payloads land under `inbox/` next to the executable.
+//! Received file/folder payloads land under `~/.ohmycopy/inbox/`.
 //!
 //! Layout per receive (avoids name clashes, keeps paste names clean):
 //! ```text
