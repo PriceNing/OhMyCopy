@@ -4,7 +4,7 @@
 //! - Linux: `~/.config/autostart/ohmycopy.desktop`
 //! - macOS: LaunchAgents plist (best-effort)
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use std::fs;
 use std::path::PathBuf;
 
@@ -14,11 +14,34 @@ const RUN_VALUE_NAME: &str = "OhMyCopy";
 const DESKTOP_FILE_NAME: &str = "ohmycopy.desktop";
 
 /// Enable or disable OS autostart to match `config.auto_start`.
+/// No-ops when already in the desired state (avoids needless work / side effects).
 pub fn apply(enabled: bool) -> Result<()> {
     if enabled {
+        let exe = current_exe_path()?;
+        if windows_already_enabled_for(&exe) {
+            return Ok(());
+        }
         enable()
     } else {
+        if !is_registered() {
+            return Ok(());
+        }
         disable()
+    }
+}
+
+/// True if autostart already points at this exe (Windows); other OS: any registration.
+fn windows_already_enabled_for(exe: &std::path::Path) -> bool {
+    #[cfg(windows)]
+    {
+        return windows_run_value()
+            .map(|v| paths_match_run_value(&v, exe))
+            .unwrap_or(false);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = exe;
+        is_registered()
     }
 }
 
@@ -45,7 +68,7 @@ fn enable() -> Result<()> {
     #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {
         let _ = exe;
-        bail!("autostart not supported on this platform");
+        anyhow::bail!("autostart not supported on this platform");
     }
 }
 
@@ -64,7 +87,7 @@ fn disable() -> Result<()> {
     }
     #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {
-        bail!("autostart not supported on this platform");
+        anyhow::bail!("autostart not supported on this platform");
     }
 }
 
@@ -88,59 +111,69 @@ pub fn is_registered() -> bool {
     }
 }
 
-// --- Windows: HKCU Run ---
+// --- Windows: HKCU Run via winreg (NO reg.exe — avoids console flash on every launch) ---
+#[cfg(windows)]
+fn run_key() -> Result<winreg::RegKey> {
+    use winreg::enums::*;
+    use winreg::RegKey;
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let (key, _) = hkcu
+        .create_subkey(r"Software\Microsoft\Windows\CurrentVersion\Run")
+        .context("open HKCU Run key")?;
+    Ok(key)
+}
+
+#[cfg(windows)]
+fn windows_run_value() -> Option<String> {
+    let key = run_key().ok()?;
+    key.get_value::<String, _>(RUN_VALUE_NAME).ok()
+}
+
+#[cfg(windows)]
+fn paths_match_run_value(value: &str, exe: &std::path::Path) -> bool {
+    let v = value.trim().trim_matches('"');
+    let e = exe.to_string_lossy();
+    // Compare case-insensitive; tolerate \\?\ prefix differences.
+    let norm = |s: &str| {
+        s.trim()
+            .trim_start_matches(r"\\?\")
+            .replace('/', "\\")
+            .to_ascii_lowercase()
+    };
+    norm(v) == norm(&e)
+}
+
 #[cfg(windows)]
 fn windows_set_run(exe: &std::path::Path, enable: bool) -> Result<()> {
-    // Use `reg` so we avoid extra native deps; user-level only (no admin).
+    let key = run_key()?;
     if enable {
         let exe_s = exe.to_string_lossy();
-        // Quote path for spaces; Run value is the full command line.
         let cmd = format!("\"{exe_s}\"");
-        let status = std::process::Command::new("reg")
-            .args([
-                "add",
-                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-                "/v",
-                RUN_VALUE_NAME,
-                "/t",
-                "REG_SZ",
-                "/d",
-                &cmd,
-                "/f",
-            ])
-            .status()
-            .context("spawn reg add")?;
-        if !status.success() {
-            bail!("reg add failed with {status}");
-        }
-        tracing::info!(path = %exe.display(), "autostart enabled (HKCU Run)");
+        key.set_value(RUN_VALUE_NAME, &cmd)
+            .context("set HKCU Run value")?;
+        tracing::info!(path = %exe.display(), "autostart enabled (HKCU Run API)");
     } else {
-        // Ignore "not found" — already disabled.
-        let _ = std::process::Command::new("reg")
-            .args([
-                "delete",
-                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-                "/v",
-                RUN_VALUE_NAME,
-                "/f",
-            ])
-            .status();
-        tracing::info!("autostart disabled (HKCU Run)");
+        // Not found is fine.
+        match key.delete_value(RUN_VALUE_NAME) {
+            Ok(()) => tracing::info!("autostart disabled (HKCU Run API)"),
+            Err(e) => {
+                let msg = e.to_string();
+                if !msg.contains("找不到")
+                    && !msg.to_ascii_lowercase().contains("not found")
+                    && !msg.contains("2")
+                {
+                    // ERROR_FILE_NOT_FOUND is normal when already absent.
+                    tracing::debug!(error = %e, "delete Run value (may already be absent)");
+                }
+            }
+        }
     }
     Ok(())
 }
 
 #[cfg(windows)]
 fn windows_is_registered() -> bool {
-    let out = std::process::Command::new("reg")
-        .args([
-            "query",
-            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-            "/v",
-            RUN_VALUE_NAME,
-        ])
-        .output();
-    matches!(out, Ok(o) if o.status.success())
+    windows_run_value().is_some()
 }
 
 // --- Linux: XDG autostart ---

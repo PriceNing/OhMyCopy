@@ -57,6 +57,10 @@ panic = "abort"
 [dev-dependencies]
 tempfile = "3"
 
+# Windows registry for login autostart (no reg.exe console flash)
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+
 # Windows .exe icon / version resource
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
