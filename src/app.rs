@@ -965,10 +965,22 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                         }
                     }
                     UiCommand::ClearHistory => {
-                        let _ = hist.lock().clear();
+                        let hist_ok = hist.lock().clear().is_ok();
+                        let inbox_res = inbox::clear_all();
                         let mut u = ui_s.lock();
                         u.history.clear();
-                        u.toast = Some("历史已清空".into());
+                        u.toast = Some(match (hist_ok, inbox_res) {
+                            (true, Ok(())) => "历史与 inbox 临时文件已清空".into(),
+                            (true, Err(e)) => {
+                                format!("历史已清空，但清理 inbox 失败: {e}")
+                            }
+                            (false, Ok(())) => {
+                                "inbox 已清空，但历史库清理可能失败".into()
+                            }
+                            (false, Err(e)) => {
+                                format!("清空失败（历史/inbox）: {e}")
+                            }
+                        });
                     }
                     UiCommand::CopyText(text) => {
                         // History re-copy: file/folder/image rows store local path in content.

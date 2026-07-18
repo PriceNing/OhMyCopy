@@ -334,6 +334,35 @@ fn entry_size(path: &Path) -> u64 {
     }
 }
 
+/// Remove **all** receipt entries under `inbox/` (used when user clears history).
+/// Recreates an empty `inbox/` directory.
+pub fn clear_all() -> Result<()> {
+    let inbox = inbox_dir()?;
+    let removed = clear_dir_contents(&inbox)?;
+    tracing::info!(removed, path = %inbox.display(), "inbox cleared");
+    Ok(())
+}
+
+fn clear_dir_contents(inbox: &Path) -> Result<u32> {
+    let mut removed = 0u32;
+    if inbox.is_dir() {
+        for entry in fs::read_dir(inbox)? {
+            let entry = entry?;
+            if let Err(e) = remove_entry(&entry.path()) {
+                tracing::warn!(
+                    error = %e,
+                    path = %entry.path().display(),
+                    "failed to remove inbox entry while clearing"
+                );
+            } else {
+                removed += 1;
+            }
+        }
+    }
+    fs::create_dir_all(inbox)?;
+    Ok(removed)
+}
+
 /// Enforce size / count / age limits. Safe to call often.
 pub fn cleanup_inbox(max_total: u64, max_entries: usize, max_age: Duration) -> Result<()> {
     let inbox = match inbox_dir() {
@@ -420,6 +449,20 @@ fn remove_entry(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn clear_dir_contents_empties_inbox() {
+        let dir = tempdir().unwrap();
+        let inbox = dir.path().join("inbox");
+        fs::create_dir_all(inbox.join("receipt_a")).unwrap();
+        fs::write(inbox.join("receipt_a").join("f.txt"), b"x").unwrap();
+        fs::create_dir_all(inbox.join("receipt_b")).unwrap();
+        fs::write(inbox.join("receipt_b").join("g.bin"), b"yy").unwrap();
+        let n = clear_dir_contents(&inbox).unwrap();
+        assert_eq!(n, 2);
+        assert!(inbox.is_dir());
+        assert!(fs::read_dir(&inbox).unwrap().next().is_none());
+    }
 
     #[test]
     fn zip_roundtrip_folder() {
