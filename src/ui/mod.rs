@@ -405,17 +405,17 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
     glass_panel(ui, t, |ui| {
         ui.horizontal(|ui| {
             ui.label(
-                egui::RichText::new("已添加客户端（自动连接）")
+                egui::RichText::new("我的设备")
                     .strong()
                     .color(t.text),
             );
-            if ui.button("重新加载").clicked() {
+            if ui.button("刷新列表").clicked() {
                 state.cmd_reload_clients = true;
             }
         });
         ui.label(
             egui::RichText::new(
-                "配对成功后两端都会出现在对方的客户端列表并自动重连。「忽略」仅暂停剪贴板；「移除」会通知对端双方都删除。",
+                "连接成功后会显示在这里，并自动保持连接。「忽略」= 暂时不同步；「移除」= 断开并不再自动连接。",
             )
             .small()
             .color(t.text_muted),
@@ -432,7 +432,7 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                 if state.saved_clients.is_empty() {
                     ui.label(
                         egui::RichText::new(
-                            "暂无客户端。在「附近设备」点连接（密码正确）或手动添加后会出现在这里。",
+                            "还没有设备。请在下方「附近设备」点连接，或手动填写对方电脑地址。",
                         )
                         .color(t.text_muted),
                     );
@@ -445,7 +445,7 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                     let connected = already.map(|p| p.connected).unwrap_or(false);
                     let connecting = already.map(|p| p.connecting).unwrap_or(false);
                     let status = if c.ignored {
-                        "已忽略 · 不同步"
+                        "已暂停同步"
                     } else {
                         already
                             .map(|p| p.status.as_str())
@@ -467,14 +467,14 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                                     egui::Button::new("移除")
                                         .fill(egui::Color32::from_rgb(90, 40, 40)),
                                 )
-                                .on_hover_text("从列表移除并断开（需二次确认）")
+                                .on_hover_text("断开并移除这台设备")
                                 .clicked()
                             {
                                 open_remove_confirm =
                                     Some((c.device_id, c.addr.clone(), c.name.clone()));
                             }
                             // Simple toggle: text only changes; slight accent when on.
-                            let ign_label = if c.ignored { "取消忽略" } else { "忽略" };
+                            let ign_label = if c.ignored { "恢复同步" } else { "暂停同步" };
                             let ign_btn = if c.ignored {
                                 egui::Button::new(
                                     egui::RichText::new(ign_label).color(t.warning),
@@ -489,9 +489,9 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                             if ui
                                 .add(ign_btn)
                                 .on_hover_text(if c.ignored {
-                                    "恢复与该设备的双向剪贴板同步"
+                                    "重新与这台设备同步剪贴板"
                                 } else {
-                                    "暂停与该设备的双向剪贴板同步（连接保留）"
+                                    "暂时不同步，连接仍可保留"
                                 })
                                 .clicked()
                             {
@@ -530,7 +530,7 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
         if let Some((id, addr, name)) = state.confirm_remove.clone() {
             let mut close = false;
             let mut confirmed = false;
-            egui::Window::new("确认移除客户端")
+            egui::Window::new("确认移除")
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -544,7 +544,7 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                     ui.add_space(4.0);
                     ui.label(
                         egui::RichText::new(format!(
-                            "{addr}\n移除后将断开连接并停止自动同步，设备会回到附近发现列表。"
+                            "地址：{addr}\n移除后将断开，并不再自动连接这台设备。"
                         ))
                         .small()
                         .color(t.text_muted),
@@ -584,13 +584,13 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
 
         ui.add_space(12.0);
         ui.label(
-            egui::RichText::new("附近设备（UDP 发现）")
+            egui::RichText::new("附近设备")
                 .strong()
                 .color(t.text),
         );
         ui.label(
             egui::RichText::new(
-                "点「连接」校验密码：成功则双方互相加入客户端列表；失败会提示且不加入。",
+                "自动搜索同一网络中的 OhMyCopy。点「连接」并输入相同密码后即可同步。",
             )
             .small()
             .color(t.text_muted),
@@ -603,7 +603,7 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
         if state.nearby.is_empty() {
             ui.label(
                 egui::RichText::new(
-                    "未发现可添加的设备。请确认在同一局域网、双方已启动，且防火墙放行 UDP。",
+                    "暂时没有发现其他设备。请确认双方都已打开软件，并在同一网络（必要时检查防火墙是否拦截本软件）。",
                 )
                 .color(t.text_muted)
                 .small(),
@@ -682,7 +682,7 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
             ui.add(
                 egui::TextEdit::singleline(&mut state.manual_addr)
                     .desired_width(200.0)
-                    .hint_text("192.168.1.10:3721"),
+                    .hint_text("例如 192.168.1.10:3721"),
             );
             if ui
                 .add(egui::Button::new("连接").fill(t.accent.gamma_multiply(0.45)))
@@ -692,9 +692,11 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
             }
         });
         ui.label(
-            egui::RichText::new("密码正确后才会写入 clients.json 并自动保持连接。")
-                .small()
-                .color(t.text_muted),
+            egui::RichText::new(
+                "填写对方电脑的 IP 和端口（默认 3721）。密码正确后会加入「我的设备」并自动保持连接。",
+            )
+            .small()
+            .color(t.text_muted),
         );
     });
 }
@@ -764,23 +766,27 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                 });
                 ui.end_row();
 
-                ui.label(egui::RichText::new("TCP 端口").color(t.text));
+                ui.label(egui::RichText::new("连接端口").color(t.text));
                 ui.add(egui::TextEdit::singleline(&mut state.tcp_port).desired_width(field_w));
                 ui.end_row();
 
-                ui.label(egui::RichText::new("UDP 端口").color(t.text));
+                ui.label(egui::RichText::new("发现端口").color(t.text));
                 ui.add(egui::TextEdit::singleline(&mut state.udp_port).desired_width(field_w));
                 ui.end_row();
 
-                ui.label(egui::RichText::new("大小上限 (MiB)").color(t.text));
-                ui.add(
-                    egui::TextEdit::singleline(&mut state.max_payload_mb).desired_width(field_w),
-                );
+                ui.label(egui::RichText::new("单次同步上限").color(t.text));
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut state.max_payload_mb)
+                            .desired_width((field_w - 40.0).max(80.0)),
+                    );
+                    ui.label(egui::RichText::new("MB").color(t.text_muted));
+                });
                 ui.end_row();
             });
         ui.label(
             egui::RichText::new(
-                "单次同步上限（文本/图片/文件/文件夹打包后）。大文件请设 100–200；协议硬顶约 480 MiB。",
+                "限制本机发送和接收的单条内容大小（文字、图片、文件、文件夹）。发与收都按本机设置判断；两端不一致时，以较小的一方为准。传大文件请把两端都调大（例如 100）。",
             )
             .small()
             .color(t.text_muted),
@@ -790,21 +796,19 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
             ui.add_space(10.0);
             ui.colored_label(
                 egui::Color32::from_rgb(220, 80, 80),
-                "⚠ 当前密码为默认值或为空：禁止配对与剪贴板同步。请改成你自己的共享密码。",
+                "⚠ 请先设置自己的共享密码。密码为空或不安全时，无法与其他电脑配对和同步。",
             );
         }
 
         ui.add_space(12.0);
         ui.checkbox(
             &mut state.auto_start,
-            egui::RichText::new("开机/登录时自动启动").color(t.text),
+            egui::RichText::new("开机或登录后自动启动").color(t.text),
         );
         ui.label(
-            egui::RichText::new(
-                "勾选并保存后写入当前用户启动项（Windows 注册表 Run / Linux ~/.config/autostart）。",
-            )
-            .small()
-            .color(t.text_muted),
+            egui::RichText::new("勾选并保存后，下次登录电脑会自动打开 OhMyCopy。")
+                .small()
+                .color(t.text_muted),
         );
 
         ui.add_space(8.0);
@@ -813,7 +817,7 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
             egui::RichText::new("启动时最小化到托盘").color(t.text),
         );
         ui.label(
-            egui::RichText::new("开启后下次启动只显示托盘图标，不弹出主窗口（左键托盘可打开）。")
+            egui::RichText::new("开启后启动时只在右下角托盘显示图标，不弹出主窗口（点击托盘可打开）。")
                 .small()
                 .color(t.text_muted),
         );
@@ -832,11 +836,11 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
             }
             if ui
                 .add(
-                    egui::Button::new("打开配置文件夹")
+                    egui::Button::new("打开数据文件夹")
                         .fill(t.card)
                         .min_size(egui::vec2(140.0, 32.0)),
                 )
-                .on_hover_text("打开 ~/.ohmycopy（配置、历史、inbox）")
+                .on_hover_text("打开本软件的设置与接收文件存放位置")
                 .clicked()
             {
                 state.cmd_open_config_folder = true;
@@ -848,15 +852,15 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new(
-                "保存后：密码会热更新（新连接立即生效）。TCP/UDP 端口仅写入配置，必须重启应用后监听/发现才切换。",
+                "提示：修改密码后新连接会立即使用新密码；修改端口后需要重启本软件才会生效。",
             )
             .small()
             .color(t.warning),
         );
         ui.add_space(4.0);
         let cfg_hint = crate::config::Config::config_dir()
-            .map(|p| format!("数据目录：{}  （config.json · clients.json · history.db · inbox/）", p.display()))
-            .unwrap_or_else(|_| "数据目录：~/.ohmycopy".into());
+            .map(|p| format!("文件保存在：{}", p.display()))
+            .unwrap_or_else(|_| "文件保存在用户目录下的 .ohmycopy 文件夹".into());
         ui.label(
             egui::RichText::new(cfg_hint)
                 .small()

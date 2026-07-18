@@ -158,7 +158,7 @@ impl NetworkHub {
     fn refuse_if_insecure(&self) -> Result<()> {
         if self.has_insecure_default_password() {
             let _ = self.events.send(NetEvent::Toast(
-                "当前仍是默认密码，已禁止配对/同步。请在设置中修改共享密码。".into(),
+                "请先在设置里填写自己的共享密码，然后才能连接其他电脑。".into(),
             ));
             bail!("insecure default password");
         }
@@ -199,11 +199,11 @@ impl NetworkHub {
         let n = self.connected_count();
         let connecting = self.connecting.lock().len() + self.connecting_addrs.lock().len();
         if n > 0 {
-            format!("已连接 {n} 台设备 · 端口 {}", self.listen_port)
+            format!("已连接 {n} 台设备")
         } else if connecting > 0 {
-            format!("连接中… · 端口 {}", self.listen_port)
+            "正在连接…".into()
         } else {
-            format!("就绪 · 端口 {} · 等待连接", self.listen_port)
+            "已就绪，等待连接".into()
         }
     }
 
@@ -456,19 +456,19 @@ impl NetworkHub {
             Ok(b) => b,
             Err(e) => {
                 tracing::error!(error = %e, "encode clipboard event");
-                let _ = self.events.send(NetEvent::Toast(format!(
-                    "编码同步数据失败: {e}"
-                )));
+                tracing::error!(error = %e, "encode clipboard event");
+                let _ = self.events.send(NetEvent::Toast(
+                    "同步失败，内容无法发送。".into(),
+                ));
                 return;
             }
         };
         let body_len = body.len();
         if body_len > MAX_FRAME_BYTES {
             tracing::error!(body_len, max = MAX_FRAME_BYTES, "clipboard event exceeds frame cap");
-            let _ = self.events.send(NetEvent::Toast(format!(
-                "内容过大（编码后 {body_len} 字节），超过帧上限 {}",
-                MAX_FRAME_BYTES
-            )));
+            let _ = self.events.send(NetEvent::Toast(
+                "内容过大，无法同步。请在设置中提高「单次同步上限」，或拆分文件。".into(),
+            ));
             return;
         }
         let ignored_ids = self.ignored_ids.lock().clone();
@@ -516,7 +516,7 @@ impl NetworkHub {
         } else if failed > 0 || except_peer.is_none() {
             tracing::warn!(failed, body_len, "clipboard event not delivered to any peer");
             let _ = self.events.send(NetEvent::Toast(
-                "同步未发出：没有可用的已连接设备，或通道已断开".into(),
+                "当前没有已连接的设备，内容未同步出去。".into(),
             ));
         }
     }
@@ -525,19 +525,14 @@ impl NetworkHub {
         let listener = match TcpListener::bind(listen_addr).await {
             Ok(l) => {
                 tracing::info!(%listen_addr, "TCP listening");
-                let _ = self.events.send(NetEvent::Status(format!(
-                    "就绪 · 监听 {} · 等待连接",
-                    listen_addr
-                )));
+                let _ = self.events.send(NetEvent::Status("已就绪，等待连接".into()));
                 l
             }
             Err(e) => {
                 tracing::error!(error = %e, "TCP bind failed");
                 let _ = self.events.send(NetEvent::FirewallHint(format!(
-                    "无法绑定端口 {}：{}。请检查端口占用，或在防火墙中放行 OhMyCopy（TCP/UDP {}）。",
-                    listen_addr.port(),
-                    e,
-                    self.listen_port
+                    "无法使用端口 {}（可能被占用或被防火墙拦截）。请换一个端口，或在系统防火墙中允许 OhMyCopy。",
+                    listen_addr.port()
                 )));
                 let _ = shutdown.recv().await;
                 return;
@@ -682,8 +677,7 @@ impl NetworkHub {
             // Auth failures already emitted PeerAuthFailed + toast via that path.
             if !msg.contains("auth") {
                 let _ = self.events.send(NetEvent::Toast(format!(
-                    "连接失败 {}: {}",
-                    addr, e
+                    "无法连接 {addr}，请确认对方已打开软件且网络畅通"
                 )));
             }
             let _ = self
@@ -907,8 +901,7 @@ impl NetworkHub {
             we_dialed,
         });
         let _ = self.events.send(NetEvent::Toast(format!(
-            "✓ 已配对：{} ({})",
-            remote_name, peer_listen_addr
+            "已与「{remote_name}」连接成功"
         )));
         let _ = self
             .events

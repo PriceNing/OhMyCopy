@@ -118,7 +118,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
     initial_ui.start_minimized_to_tray = cfg_snap.start_minimized_to_tray;
     initial_ui.auto_start = cfg_snap.auto_start;
     initial_ui.history = history.lock().list("", 100).unwrap_or_default();
-    initial_ui.status_line = format!("设备 {} · {}", cfg_snap.device_name, cfg_snap.device_id);
+    initial_ui.status_line = format!("本机：{}", cfg_snap.device_name);
     let ui_shared = Arc::new(Mutex::new(initial_ui));
 
     // Keep OS login item in sync with config (e.g. after migrate / manual json edit).
@@ -289,7 +289,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                 };
                                 let mut u = ui_s.lock();
                                 u.history = preview;
-                                u.toast = Some("已从远端同步文本".into());
+                                u.toast = Some("已收到对方的文字".into());
                             }
                             ContentKind::File => {
                                 let name = ev
@@ -319,7 +319,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                         Err(e) => {
                                             tracing::warn!(error = %e, "extract folder zip");
                                             ui_s.lock().toast =
-                                                Some(format!("同步文件夹解压失败: {e}"));
+                                                Some(format!("收到文件夹，但保存失败：{e}"));
                                             continue;
                                         }
                                     }
@@ -329,7 +329,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                         Err(e) => {
                                             tracing::warn!(error = %e, "store inbox file");
                                             ui_s.lock().toast =
-                                                Some(format!("同步文件写入失败: {e}"));
+                                                Some(format!("收到文件，但保存失败：{e}"));
                                             continue;
                                         }
                                     }
@@ -368,7 +368,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                             {
                                                 tracing::warn!(error = %e, "set clipboard files");
                                                 ui_s.lock().toast = Some(format!(
-                                                    "已保存到 inbox，但放入剪贴板失败: {e}"
+                                                    "文件已保存，但复制到剪贴板失败：{e}"
                                                 ));
                                             }
                                         }
@@ -376,7 +376,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                 } else if let Err(e) = clip.set_files_from_sync(&[dest.clone()]) {
                                     tracing::warn!(error = %e, "set clipboard files");
                                     ui_s.lock().toast =
-                                        Some(format!("已保存到 inbox，但放入剪贴板失败: {e}"));
+                                        Some(format!("文件已保存，但复制到剪贴板失败：{e}"));
                                 }
                                 // Pass base name only — history layer formats the list title.
                                 let list_name = if is_folder {
@@ -410,15 +410,9 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                 let mut u = ui_s.lock();
                                 u.history = preview;
                                 u.toast = Some(if is_folder {
-                                    format!(
-                                        "已从远端同步文件夹：{display_name}（打包 {} 字节）",
-                                        ev.payload.len()
-                                    )
+                                    format!("已收到文件夹：{display_name}")
                                 } else {
-                                    format!(
-                                        "已从远端同步文件：{display_name}（{} 字节）",
-                                        ev.payload.len()
-                                    )
+                                    format!("已收到文件：{display_name}")
                                 });
                             }
                             ContentKind::Image => {
@@ -427,14 +421,14 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                     Err(e) => {
                                         tracing::warn!(error = %e, "decode remote png");
                                         ui_s.lock().toast =
-                                            Some(format!("图片解码失败: {e}"));
+                                            Some(format!("图片无法显示：{e}"));
                                         continue;
                                     }
                                 };
                                 if let Err(e) = clip.set_image_from_sync(img_w, img_h, rgba) {
                                     tracing::warn!(error = %e, "set clipboard image");
                                     ui_s.lock().toast =
-                                        Some(format!("图片放入剪贴板失败: {e}"));
+                                        Some(format!("图片复制到剪贴板失败：{e}"));
                                     continue;
                                 }
                                 let fname = ev
@@ -474,10 +468,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                 };
                                 let mut u = ui_s.lock();
                                 u.history = preview;
-                                u.toast = Some(format!(
-                                    "已从远端同步图片：{dim}（{} 字节）",
-                                    ev.payload.len()
-                                ));
+                                u.toast = Some(format!("已收到图片（{dim}）"));
                             }
                         }
                     }
@@ -514,7 +505,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                 n.device_id != device_id.to_string()
                                     && n.addr != addr.to_string()
                             });
-                            u.toast = Some(format!("✓ 已配对并加入客户端：{name} ({addr})"));
+                            u.toast = Some(format!("已连接「{name}」，可以同步了"));
                         }
                         tracing::info!(%device_id, %addr, %name, we_dialed, "mutual pair saved");
                     }
@@ -531,10 +522,10 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                         let mut u = ui_s.lock();
                         if was_trial {
                             u.toast = Some(format!(
-                                "密码不匹配，未添加「{name}」到客户端列表"
+                                "密码不正确，未能连接「{name}」。请确认双方密码一致。"
                             ));
                         } else {
-                            u.toast = Some(format!("与 {name} 鉴权失败（密码不匹配）"));
+                            u.toast = Some(format!("与「{name}」密码不一致，连接失败"));
                         }
                         let _ = (device_id, addr);
                     }
@@ -552,9 +543,9 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                             let mut u = ui_s.lock();
                             u.saved_clients = cf.clients.clone();
                             u.toast = Some(if from_remote {
-                                format!("「{name}」已解除配对，已从客户端列表移除")
+                                format!("「{name}」已断开，并从列表中移除")
                             } else {
-                                format!("已解除与「{name}」的配对")
+                                format!("已与「{name}」断开连接")
                             });
                         }
                         hub_e.remove_client_silent(Some(device_id), addr);
@@ -665,9 +656,8 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                 let max = core.max_payload_bytes;
                                 drop(core);
                                 ui_c.lock().toast = Some(format!(
-                                    "文本大小 {} 超过上限 {}，已取消同步。",
-                                    text.len(),
-                                    max
+                                    "这段文字太大（约 {} KB），超过本机上限，未同步。可在设置中提高「单次同步上限」。",
+                                    text.len() / 1024
                                 ));
                                 return;
                             }
@@ -682,7 +672,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                             {
                                 let mut u = ui_c.lock();
                                 u.history = preview;
-                                u.toast = Some("已同步文本".into());
+                                u.toast = Some("文字已同步到其他设备".into());
                             }
                             hub_c.broadcast_clipboard(ev);
                         }
@@ -696,7 +686,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                             Ok(p) => p,
                             Err(e) => {
                                 ui_c.lock().toast =
-                                    Some(format!("图片编码失败: {e}"));
+                                    Some(format!("图片处理失败：{e}"));
                                 return;
                             }
                         };
@@ -704,7 +694,8 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                         let max = eng.lock().max_payload_bytes;
                         if size > max {
                             ui_c.lock().toast = Some(format!(
-                                "图片大小 {size} 超过上限 {max}，已跳过。可在设置中提高上限。"
+                                "图片过大（约 {} MB），超过本机上限，未同步。可在设置中提高「单次同步上限」。",
+                                size / (1024 * 1024)
                             ));
                             return;
                         }
@@ -746,7 +737,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                 let mut u = ui_c.lock();
                                 u.history = preview;
                                 u.toast = Some(format!(
-                                    "已同步图片：{width}×{height}（{size} 字节）"
+                                    "图片已同步到其他设备（{width}×{height}）"
                                 ));
                             }
                             hub_c.broadcast_clipboard(ev);
@@ -760,7 +751,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                 Ok(t) => t,
                                 Err(e) => {
                                     ui_c.lock().toast =
-                                        Some(format!("打包/读取失败 {}: {e}", path.display()));
+                                        Some(format!("无法读取文件：{e}"));
                                     continue;
                                 }
                             };
@@ -807,9 +798,9 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                     let mut u = ui_c.lock();
                                     u.history = preview;
                                     u.toast = Some(if is_dir {
-                                        format!("已同步文件夹：{base_name}（打包 {size} 字节）")
+                                        format!("文件夹已同步：{base_name}")
                                     } else {
-                                        format!("已同步文件：{base_name}")
+                                        format!("文件已同步：{base_name}")
                                     });
                                 }
                                 hub_c.broadcast_clipboard(ev);
@@ -868,7 +859,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                             cfg.save()
                         };
                         if let Err(e) = save_result {
-                            ui_s.lock().toast = Some(format!("保存失败: {e}"));
+                            ui_s.lock().toast = Some(format!("保存失败：{e}"));
                         } else {
                             eng.lock().max_payload_bytes = max_payload;
                             // Password can hot-reload for future handshakes; ports need restart.
@@ -880,31 +871,31 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                             &password,
                                         ) {
                                             notes.push(
-                                                "密码已更新，但默认/空密码禁止配对与同步".into(),
+                                                "密码已保存，但当前密码不安全，仍无法配对同步"
+                                                    .into(),
                                             );
                                         } else {
                                             notes.push(
-                                                "密码已热更新（新连接生效；已建立会话仍用旧密钥）"
-                                                    .into(),
+                                                "密码已更新，之后新连接将使用新密码".into(),
                                             );
                                         }
                                     }
-                                    Err(e) => notes.push(format!("密码热更新失败: {e}")),
+                                    Err(e) => notes.push(format!("密码更新失败：{e}")),
                                 }
                             }
                             if port_changed {
-                                notes.push(format!(
-                                    "端口已写入配置（{tcp_port}/{udp_port}），必须重启应用后监听/发现才切换"
-                                ));
+                                notes.push(
+                                    "端口已保存，请重启本软件后生效".into(),
+                                );
                             }
                             if auto_changed || auto_start {
                                 match ohmycopy::autostart::apply(auto_start) {
                                     Ok(()) => notes.push(if auto_start {
-                                        "已写入开机启动项".into()
+                                        "已开启开机自动启动".into()
                                     } else {
-                                        "已移除开机启动项".into()
+                                        "已关闭开机自动启动".into()
                                     }),
-                                    Err(e) => notes.push(format!("开机启动项更新失败: {e}")),
+                                    Err(e) => notes.push(format!("自动启动设置失败：{e}")),
                                 }
                             }
                             if notes.is_empty() {
@@ -950,7 +941,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                             let _ = cf.save();
                             ui_s.lock().saved_clients = cf.clients.clone();
                             ui_s.lock().toast =
-                                Some(format!("已解除配对并通知对端：{addr}"));
+                                Some(format!("已移除设备 {addr}"));
                         }
                         hub_c.remove_client(device_id, addr); // notifies + disconnects
                         hub_c.set_ignored(device_id, addr, false);
@@ -967,7 +958,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                             }
                             ui_s.lock().saved_clients = cf.clients.clone();
                             ui_s.lock().toast = Some(if ignored {
-                                format!("已忽略 {addr}：不再双向同步剪贴板")
+                                format!("已暂停与 {addr} 的剪贴板同步")
                             } else {
                                 format!("已恢复与 {addr} 的剪贴板同步")
                             });
@@ -982,11 +973,11 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                 *cf = fresh;
                                 ui_s.lock().saved_clients = cf.clients.clone();
                                 ui_s.lock().toast =
-                                    Some("已从 clients.json 重新加载客户端".into());
+                                    Some("设备列表已刷新".into());
                             }
                             Err(e) => {
                                 ui_s.lock().toast =
-                                    Some(format!("加载 clients.json 失败: {e}"));
+                                    Some(format!("刷新设备列表失败：{e}"));
                             }
                         }
                     }
@@ -996,15 +987,15 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                         let mut u = ui_s.lock();
                         u.history.clear();
                         u.toast = Some(match (hist_ok, inbox_res) {
-                            (true, Ok(())) => "历史与 inbox 临时文件已清空".into(),
+                            (true, Ok(())) => "历史记录和接收的临时文件已清空".into(),
                             (true, Err(e)) => {
-                                format!("历史已清空，但清理 inbox 失败: {e}")
+                                format!("历史已清空，但清理接收文件失败：{e}")
                             }
                             (false, Ok(())) => {
-                                "inbox 已清空，但历史库清理可能失败".into()
+                                "接收文件已清空，但历史记录清理可能失败".into()
                             }
                             (false, Err(e)) => {
-                                format!("清空失败（历史/inbox）: {e}")
+                                format!("清空失败：{e}")
                             }
                         });
                     }
@@ -1022,7 +1013,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                     Ok(bytes) => match png_to_rgba(&bytes) {
                                         Ok((w, h, rgba)) => clip
                                             .set_image_local(w, h, rgba)
-                                            .map(|_| "已复制图片到剪贴板".to_string()),
+                                            .map(|_| "图片已复制，可以粘贴了".to_string()),
                                         Err(e) => Err(e),
                                     },
                                     Err(e) => Err(anyhow::anyhow!(e)),
@@ -1639,11 +1630,11 @@ impl eframe::App for AppShell {
         if self.inner.ui.cmd_open_config_folder {
             match Config::open_config_folder() {
                 Ok(()) => {
-                    self.inner.ui.toast = Some("已打开配置文件夹".into());
+                    self.inner.ui.toast = Some("已打开数据文件夹".into());
                     self.inner.ui.toast_ttl_frames = TOAST_FRAMES;
                 }
                 Err(e) => {
-                    self.inner.ui.toast = Some(format!("无法打开配置文件夹: {e}"));
+                    self.inner.ui.toast = Some(format!("无法打开数据文件夹：{e}"));
                     self.inner.ui.toast_ttl_frames = TOAST_FRAMES;
                 }
             }
@@ -1652,7 +1643,8 @@ impl eframe::App for AppShell {
             if let Ok(addr) = self.inner.ui.manual_addr.parse::<SocketAddr>() {
                 let _ = self.cmd_tx.send(UiCommand::AddManual(addr));
             } else {
-                self.inner.ui.toast = Some("地址格式无效，请使用 ip:port".into());
+                self.inner.ui.toast =
+                    Some("地址格式不对，请填写如 192.168.1.10:3721".into());
                 self.inner.ui.toast_ttl_frames = TOAST_FRAMES;
             }
         }
@@ -1666,7 +1658,7 @@ impl eframe::App for AppShell {
                     });
                 }
                 _ => {
-                    self.inner.ui.toast = Some("设备地址无效".into());
+                    self.inner.ui.toast = Some("设备地址无效，请重试".into());
                     self.inner.ui.toast_ttl_frames = TOAST_FRAMES;
                 }
             }
@@ -1675,7 +1667,7 @@ impl eframe::App for AppShell {
             if let Ok(addr) = addr_str.parse::<SocketAddr>() {
                 let _ = self.cmd_tx.send(UiCommand::RemoveClient { device_id, addr });
             } else {
-                self.inner.ui.toast = Some("客户端地址无效".into());
+                self.inner.ui.toast = Some("设备地址无效".into());
                 self.inner.ui.toast_ttl_frames = TOAST_FRAMES;
             }
         }
