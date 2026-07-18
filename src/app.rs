@@ -1196,8 +1196,10 @@ fn apply_clients(hub: &Arc<NetworkHub>, clients: &ClientsFile) {
 
 fn viewport_builder(start_minimized_to_tray: bool) -> egui::ViewportBuilder {
     let mut vb = egui::ViewportBuilder::default()
-        .with_inner_size([720.0, 520.0])
-        .with_min_inner_size([480.0, 360.0])
+        // Tall enough for Settings (fields + checkboxes + action buttons) plus
+        // the bottom status/firewall bar without clipping the last controls.
+        .with_inner_size([720.0, 660.0])
+        .with_min_inner_size([480.0, 420.0])
         .with_title(tray::WINDOW_TITLE);
     if let Ok(icon) = ohmycopy::icon::egui_icon_data() {
         vb = vb.with_icon(icon);

@@ -131,8 +131,19 @@ impl eframe::App for OhMyCopyApp {
             }
         }
 
-        egui::TopBottomPanel::top("top").show(ctx, |ui| {
-            ui.add_space(6.0);
+        // Slightly wider horizontal margin so edge buttons/checkboxes are not
+        // clipped by the window / panel clip by ~1–2px (stroke + AA).
+        let bar_frame = egui::Frame::new()
+            .inner_margin(egui::Margin::symmetric(12, 4))
+            .fill(t.bg);
+        let central_frame = egui::Frame::new()
+            .inner_margin(egui::Margin::symmetric(10, 8))
+            .fill(t.bg);
+
+        egui::TopBottomPanel::top("top")
+            .frame(bar_frame)
+            .show(ctx, |ui| {
+            ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.heading(egui::RichText::new("OhMyCopy").color(t.accent).strong());
                 ui.label(
@@ -166,11 +177,12 @@ impl eframe::App for OhMyCopyApp {
 
         // Fixed height avoids toast show/hide resizing the bar (visual flicker).
         let bottom_h = if self.ui.firewall_hint.is_some() {
-            52.0
+            56.0
         } else {
-            28.0
+            32.0
         };
         egui::TopBottomPanel::bottom("bottom")
+            .frame(bar_frame)
             .exact_height(bottom_h)
             .show(ctx, |ui| {
                 ui.add_space(4.0);
@@ -193,7 +205,9 @@ impl eframe::App for OhMyCopyApp {
                 });
             });
 
-        egui::CentralPanel::default().show(ctx, |ui| match self.ui.tab {
+        egui::CentralPanel::default()
+            .frame(central_frame)
+            .show(ctx, |ui| match self.ui.tab {
             Tab::History => draw_history(ui, &mut self.ui, &t),
             Tab::Devices => draw_devices(ui, &mut self.ui, &t),
             Tab::Settings => draw_settings(ui, &mut self.ui, &t),
@@ -236,9 +250,15 @@ fn glass_panel(ui: &mut egui::Ui, t: &GlassTheme, add_contents: impl FnOnce(&mut
         egui::StrokeKind::Inside,
     );
 
-    let inner = rect.shrink(12.0);
+    // Inset content from the card edge. Keep a little room so checkbox/button
+    // strokes and AA fringes on the far left/right are not clipped by 1–2px.
+    let pad = 16.0;
+    let inner = rect.shrink(pad);
+    // Layout to `inner`, but clip a couple of pixels wider so edge widgets
+    // still paint fully while staying inside the card border.
+    let clip = inner.expand(2.0).intersect(rect.shrink(1.0));
     ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
-        ui.set_clip_rect(inner.intersect(ui.clip_rect()));
+        ui.set_clip_rect(clip.intersect(ui.clip_rect()));
         ui.set_min_size(inner.size());
         add_contents(ui);
     });
@@ -711,160 +731,181 @@ fn short_id(id: &str) -> String {
 
 fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
     glass_panel(ui, t, |ui| {
-        // Stretch content column like history/devices cards.
-        let col_w = ui.available_width().min(520.0);
-        ui.set_max_width(ui.available_width());
-
-        ui.label(egui::RichText::new("基本设置").strong().color(t.text));
-        ui.add_space(8.0);
-
-        egui::Grid::new("settings")
-            .num_columns(2)
-            .spacing([16.0, 12.0])
-            .min_col_width(110.0)
+        // Scroll so action buttons stay reachable when the window is short
+        // or the bottom status/firewall bar steals height.
+        let list_w = ui.available_width();
+        egui::ScrollArea::vertical()
+            .id_salt("settings_scroll")
+            .max_width(list_w)
+            .auto_shrink([false, false])
+            .hscroll(false)
             .show(ui, |ui| {
-                let field_w = (col_w - 130.0).clamp(180.0, 360.0);
+                ui.set_max_width(list_w);
+                // Stretch content column like history/devices cards.
+                let col_w = ui.available_width().min(520.0);
 
-                ui.label(egui::RichText::new("设备名称").color(t.text));
-                ui.add(
-                    egui::TextEdit::singleline(&mut state.device_name).desired_width(field_w),
+                ui.label(egui::RichText::new("基本设置").strong().color(t.text));
+                ui.add_space(8.0);
+
+                egui::Grid::new("settings")
+                    .num_columns(2)
+                    .spacing([16.0, 12.0])
+                    .min_col_width(110.0)
+                    .show(ui, |ui| {
+                        let field_w = (col_w - 130.0).clamp(180.0, 360.0);
+
+                        ui.label(egui::RichText::new("设备名称").color(t.text));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut state.device_name)
+                                .desired_width(field_w),
+                        );
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("共享密码").color(t.text));
+                        ui.horizontal(|ui| {
+                            let eye_w = 40.0;
+                            let edit_w = (field_w - eye_w - 6.0).max(120.0);
+                            ui.add(
+                                egui::TextEdit::singleline(&mut state.password)
+                                    .password(!state.show_password)
+                                    .desired_width(edit_w),
+                            );
+                            // Toggle visibility (text works reliably with CJK system fonts)
+                            let eye_label = if state.show_password {
+                                "隐藏"
+                            } else {
+                                "显示"
+                            };
+                            if ui
+                                .add_sized(
+                                    [eye_w, 24.0],
+                                    egui::Button::new(
+                                        egui::RichText::new(eye_label)
+                                            .small()
+                                            .color(t.text_muted),
+                                    )
+                                    .fill(t.card),
+                                )
+                                .on_hover_text(if state.show_password {
+                                    "隐藏密码"
+                                } else {
+                                    "显示密码"
+                                })
+                                .clicked()
+                            {
+                                state.show_password = !state.show_password;
+                            }
+                        });
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("连接端口").color(t.text));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut state.tcp_port).desired_width(field_w),
+                        );
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("发现端口").color(t.text));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut state.udp_port).desired_width(field_w),
+                        );
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new("单次同步上限").color(t.text));
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut state.max_payload_mb)
+                                    .desired_width((field_w - 40.0).max(80.0)),
+                            );
+                            ui.label(egui::RichText::new("MB").color(t.text_muted));
+                        });
+                        ui.end_row();
+                    });
+                ui.label(
+                    egui::RichText::new(
+                        "限制本机发送和接收的单条内容大小（文字、图片、文件、文件夹）。发与收都按本机设置判断；两端不一致时，以较小的一方为准。传大文件请把两端都调大（例如 100）。",
+                    )
+                    .small()
+                    .color(t.text_muted),
                 );
-                ui.end_row();
 
-                ui.label(egui::RichText::new("共享密码").color(t.text));
-                ui.horizontal(|ui| {
-                    let eye_w = 40.0;
-                    let edit_w = (field_w - eye_w - 6.0).max(120.0);
-                    ui.add(
-                        egui::TextEdit::singleline(&mut state.password)
-                            .password(!state.show_password)
-                            .desired_width(edit_w),
+                if crate::config::Config::is_insecure_default_password(&state.password) {
+                    ui.add_space(10.0);
+                    ui.colored_label(
+                        egui::Color32::from_rgb(220, 80, 80),
+                        "⚠ 请先设置自己的共享密码。密码为空或不安全时，无法与其他电脑配对和同步。",
                     );
-                    // Toggle visibility (text works reliably with CJK system fonts)
-                    let eye_label = if state.show_password {
-                        "隐藏"
-                    } else {
-                        "显示"
-                    };
+                }
+
+                ui.add_space(12.0);
+                ui.checkbox(
+                    &mut state.auto_start,
+                    egui::RichText::new("开机或登录后自动启动").color(t.text),
+                );
+                ui.label(
+                    egui::RichText::new("勾选并保存后，下次登录电脑会自动打开 OhMyCopy。")
+                        .small()
+                        .color(t.text_muted),
+                );
+
+                ui.add_space(8.0);
+                ui.checkbox(
+                    &mut state.start_minimized_to_tray,
+                    egui::RichText::new("启动时最小化到托盘").color(t.text),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "开启后启动时只在右下角托盘显示图标，不弹出主窗口（点击托盘可打开）。",
+                    )
+                    .small()
+                    .color(t.text_muted),
+                );
+
+                ui.add_space(16.0);
+                ui.horizontal(|ui| {
                     if ui
-                        .add_sized(
-                            [eye_w, 24.0],
-                            egui::Button::new(
-                                egui::RichText::new(eye_label).small().color(t.text_muted),
-                            )
-                            .fill(t.card),
+                        .add(
+                            egui::Button::new("保存设置")
+                                .fill(t.accent.gamma_multiply(0.5))
+                                .min_size(egui::vec2(120.0, 32.0)),
                         )
-                        .on_hover_text(if state.show_password {
-                            "隐藏密码"
-                        } else {
-                            "显示密码"
-                        })
                         .clicked()
                     {
-                        state.show_password = !state.show_password;
+                        state.cmd_save_settings = true;
+                    }
+                    if ui
+                        .add(
+                            egui::Button::new("打开数据文件夹")
+                                .fill(t.card)
+                                .min_size(egui::vec2(140.0, 32.0)),
+                        )
+                        .on_hover_text("打开本软件的设置与接收文件存放位置")
+                        .clicked()
+                    {
+                        state.cmd_open_config_folder = true;
                     }
                 });
-                ui.end_row();
 
-                ui.label(egui::RichText::new("连接端口").color(t.text));
-                ui.add(egui::TextEdit::singleline(&mut state.tcp_port).desired_width(field_w));
-                ui.end_row();
-
-                ui.label(egui::RichText::new("发现端口").color(t.text));
-                ui.add(egui::TextEdit::singleline(&mut state.udp_port).desired_width(field_w));
-                ui.end_row();
-
-                ui.label(egui::RichText::new("单次同步上限").color(t.text));
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut state.max_payload_mb)
-                            .desired_width((field_w - 40.0).max(80.0)),
-                    );
-                    ui.label(egui::RichText::new("MB").color(t.text_muted));
-                });
-                ui.end_row();
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new(
+                        "提示：修改密码后新连接会立即使用新密码；修改端口后需要重启本软件才会生效。",
+                    )
+                    .small()
+                    .color(t.warning),
+                );
+                ui.add_space(4.0);
+                let cfg_hint = crate::config::Config::config_dir()
+                    .map(|p| format!("文件保存在：{}", p.display()))
+                    .unwrap_or_else(|_| "文件保存在用户目录下的 .ohmycopy 文件夹".into());
+                ui.label(
+                    egui::RichText::new(cfg_hint)
+                        .small()
+                        .color(t.text_muted),
+                );
+                // Bottom breathing room so last controls aren't flush against the clip.
+                ui.add_space(8.0);
             });
-        ui.label(
-            egui::RichText::new(
-                "限制本机发送和接收的单条内容大小（文字、图片、文件、文件夹）。发与收都按本机设置判断；两端不一致时，以较小的一方为准。传大文件请把两端都调大（例如 100）。",
-            )
-            .small()
-            .color(t.text_muted),
-        );
-
-        if crate::config::Config::is_insecure_default_password(&state.password) {
-            ui.add_space(10.0);
-            ui.colored_label(
-                egui::Color32::from_rgb(220, 80, 80),
-                "⚠ 请先设置自己的共享密码。密码为空或不安全时，无法与其他电脑配对和同步。",
-            );
-        }
-
-        ui.add_space(12.0);
-        ui.checkbox(
-            &mut state.auto_start,
-            egui::RichText::new("开机或登录后自动启动").color(t.text),
-        );
-        ui.label(
-            egui::RichText::new("勾选并保存后，下次登录电脑会自动打开 OhMyCopy。")
-                .small()
-                .color(t.text_muted),
-        );
-
-        ui.add_space(8.0);
-        ui.checkbox(
-            &mut state.start_minimized_to_tray,
-            egui::RichText::new("启动时最小化到托盘").color(t.text),
-        );
-        ui.label(
-            egui::RichText::new("开启后启动时只在右下角托盘显示图标，不弹出主窗口（点击托盘可打开）。")
-                .small()
-                .color(t.text_muted),
-        );
-
-        ui.add_space(16.0);
-        ui.horizontal(|ui| {
-            if ui
-                .add(
-                    egui::Button::new("保存设置")
-                        .fill(t.accent.gamma_multiply(0.5))
-                        .min_size(egui::vec2(120.0, 32.0)),
-                )
-                .clicked()
-            {
-                state.cmd_save_settings = true;
-            }
-            if ui
-                .add(
-                    egui::Button::new("打开数据文件夹")
-                        .fill(t.card)
-                        .min_size(egui::vec2(140.0, 32.0)),
-                )
-                .on_hover_text("打开本软件的设置与接收文件存放位置")
-                .clicked()
-            {
-                state.cmd_open_config_folder = true;
-            }
-        });
-
-        ui.add_space(12.0);
-        ui.separator();
-        ui.add_space(8.0);
-        ui.label(
-            egui::RichText::new(
-                "提示：修改密码后新连接会立即使用新密码；修改端口后需要重启本软件才会生效。",
-            )
-            .small()
-            .color(t.warning),
-        );
-        ui.add_space(4.0);
-        let cfg_hint = crate::config::Config::config_dir()
-            .map(|p| format!("文件保存在：{}", p.display()))
-            .unwrap_or_else(|_| "文件保存在用户目录下的 .ohmycopy 文件夹".into());
-        ui.label(
-            egui::RichText::new(cfg_hint)
-                .small()
-                .color(t.text_muted),
-        );
     });
 }
