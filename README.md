@@ -83,6 +83,7 @@ Linux:    ~/.ohmycopy/
 |------|------|
 | `console` | `false`（默认）不弹黑框；需要日志时设 `true` |
 | `start_minimized_to_tray` | `true` 时启动仅托盘 |
+| `auto_start` | `true` 时写入当前用户开机/登录启动项（设置里勾选并保存） |
 | `max_payload_bytes` | 默认 10MiB，可在设置中提高（大文件需两端一致） |
 | `sync_enabled` | 暂停/恢复同步 |
 

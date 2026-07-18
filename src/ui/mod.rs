@@ -35,6 +35,8 @@ pub struct UiState {
     pub sync_enabled: bool,
     /// Start with tray only (no main window). Persisted as config.start_minimized_to_tray.
     pub start_minimized_to_tray: bool,
+    /// Launch at user login. Persisted as config.auto_start + OS startup entry.
+    pub auto_start: bool,
     pub manual_addr: String,
     pub search: String,
     pub status_line: String,
@@ -78,6 +80,7 @@ impl Default for UiState {
             max_payload_mb: "10".into(),
             sync_enabled: true,
             start_minimized_to_tray: false,
+            auto_start: false,
             manual_addr: String::new(),
             search: String::new(),
             status_line: "启动中…".into(),
@@ -792,6 +795,19 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
         }
 
         ui.add_space(12.0);
+        ui.checkbox(
+            &mut state.auto_start,
+            egui::RichText::new("开机/登录时自动启动").color(t.text),
+        );
+        ui.label(
+            egui::RichText::new(
+                "勾选并保存后写入当前用户启动项（Windows 注册表 Run / Linux ~/.config/autostart）。",
+            )
+            .small()
+            .color(t.text_muted),
+        );
+
+        ui.add_space(8.0);
         ui.checkbox(
             &mut state.start_minimized_to_tray,
             egui::RichText::new("启动时最小化到托盘").color(t.text),

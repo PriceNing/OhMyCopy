@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod autostart;
 pub mod clients;
 pub mod clipboard;
 pub mod config;

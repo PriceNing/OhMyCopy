@@ -41,6 +41,7 @@ enum UiCommand {
         udp_port: u16,
         max_payload: u64,
         start_minimized_to_tray: bool,
+        auto_start: bool,
     },
     /// Trial dial by IP; persist only after PeerSessionReady.
     AddManual(SocketAddr),
@@ -115,9 +116,15 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
     initial_ui.max_payload_mb = format!("{}", cfg_snap.max_payload_bytes / (1024 * 1024));
     initial_ui.sync_enabled = cfg_snap.sync_enabled;
     initial_ui.start_minimized_to_tray = cfg_snap.start_minimized_to_tray;
+    initial_ui.auto_start = cfg_snap.auto_start;
     initial_ui.history = history.lock().list("", 100).unwrap_or_default();
     initial_ui.status_line = format!("设备 {} · {}", cfg_snap.device_name, cfg_snap.device_id);
     let ui_shared = Arc::new(Mutex::new(initial_ui));
+
+    // Keep OS login item in sync with config (e.g. after migrate / manual json edit).
+    if let Err(e) = ohmycopy::autostart::apply(cfg_snap.auto_start) {
+        tracing::warn!(error = %e, enabled = cfg_snap.auto_start, "apply autostart on startup");
+    }
 
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<UiCommand>();
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -835,13 +842,20 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                         udp_port,
                         max_payload,
                         start_minimized_to_tray,
+                        auto_start,
                     } => {
-                        let (old_tcp, old_udp, old_pass) = {
+                        let (old_tcp, old_udp, old_pass, old_auto) = {
                             let cfg = config.lock();
-                            (cfg.tcp_port, cfg.udp_port, cfg.password.clone())
+                            (
+                                cfg.tcp_port,
+                                cfg.udp_port,
+                                cfg.password.clone(),
+                                cfg.auto_start,
+                            )
                         };
                         let port_changed = old_tcp != tcp_port || old_udp != udp_port;
                         let pass_changed = old_pass != password;
+                        let auto_changed = old_auto != auto_start;
                         let save_result = {
                             let mut cfg = config.lock();
                             cfg.device_name = device_name;
@@ -850,6 +864,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                             cfg.udp_port = udp_port;
                             cfg.max_payload_bytes = max_payload;
                             cfg.start_minimized_to_tray = start_minimized_to_tray;
+                            cfg.auto_start = auto_start;
                             cfg.save()
                         };
                         if let Err(e) = save_result {
@@ -882,11 +897,22 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                     "端口已写入配置（{tcp_port}/{udp_port}），必须重启应用后监听/发现才切换"
                                 ));
                             }
+                            if auto_changed || auto_start {
+                                match ohmycopy::autostart::apply(auto_start) {
+                                    Ok(()) => notes.push(if auto_start {
+                                        "已写入开机启动项".into()
+                                    } else {
+                                        "已移除开机启动项".into()
+                                    }),
+                                    Err(e) => notes.push(format!("开机启动项更新失败: {e}")),
+                                }
+                            }
                             if notes.is_empty() {
                                 notes.push("设置已保存".into());
                             }
                             let mut u = ui_s.lock();
                             u.start_minimized_to_tray = start_minimized_to_tray;
+                            u.auto_start = auto_start;
                             u.toast = Some(notes.join("；"));
                         }
                     }
@@ -1606,6 +1632,7 @@ impl eframe::App for AppShell {
                 udp_port: udp,
                 max_payload: mb * 1024 * 1024,
                 start_minimized_to_tray: self.inner.ui.start_minimized_to_tray,
+                auto_start: self.inner.ui.auto_start,
             });
         }
         // Note: cmd_open_config_folder is cleared at frame start; capture after update.
