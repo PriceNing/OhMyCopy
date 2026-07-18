@@ -1,0 +1,16 @@
+{
+  "config_version": 2,
+  "device_name": "Study-PC",
+  "device_id": "00000000-0000-4000-8000-000000000001",
+  "tcp_port": 3721,
+  "udp_port": 3721,
+  "password": "change-me",
+  "max_payload_bytes": 10485760,
+  "history_limit": 200,
+  "discover_interval_secs": 5,
+  "theme": "dark_glass",
+  "auto_start": false,
+  "start_minimized_to_tray": false,
+  "sync_enabled": true,
+  "console": false
+}

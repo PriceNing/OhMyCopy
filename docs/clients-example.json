@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "clients": [
+    {
+      "device_id": "00000000-0000-4000-8000-000000000002",
+      "name": "Server-Debian",
+      "addr": "192.168.1.20:3721",
+      "auto_connect": true,
+      "last_seen": 0,
+      "source": "manual",
+      "note": "办公室服务器，启动后自动连接"
+    },
+    {
+      "device_id": null,
+      "name": "MiniPC",
+      "addr": "192.168.1.30:3721",
+      "auto_connect": false,
+      "last_seen": 0,
+      "source": "file",
+      "note": "可在设备页点「连接」或把 auto_connect 改为 true"
+    }
+  ]
+}
