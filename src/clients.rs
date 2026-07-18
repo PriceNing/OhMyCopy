@@ -15,18 +15,13 @@ use uuid::Uuid;
 
 pub const CLIENTS_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ClientSource {
     Discover,
+    #[default]
     Manual,
     File,
-}
-
-impl Default for ClientSource {
-    fn default() -> Self {
-        Self::Manual
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

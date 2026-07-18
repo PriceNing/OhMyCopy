@@ -423,7 +423,7 @@ async fn pack_path_rejects_oversize_file() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn hub_reverse_b_to_a() {
     let max_payload = 4 * 1024 * 1024u64;
-    let (id_a, id_b, hub_a, hub_b, shut_a, shut_b, mut ev_a, _, _, _) = pair_ab(max_payload).await;
+    let (_id_a, id_b, hub_a, hub_b, shut_a, shut_b, mut ev_a, _, _, _) = pair_ab(max_payload).await;
 
     let ev = eng(id_b, max_payload)
         .lock()

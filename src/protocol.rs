@@ -4,6 +4,7 @@ use uuid::Uuid;
 pub const PROTOCOL_VERSION: u16 = 2;
 pub const MAGIC: &[u8; 4] = b"OMCP";
 
+/// Numeric tags for documentation / debugging. Wire format uses postcard `Message` enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u16)]
 pub enum FrameType {
@@ -15,6 +16,7 @@ pub enum FrameType {
     Ping = 6,
     Pong = 7,
     Error = 8,
+    Unpair = 9,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

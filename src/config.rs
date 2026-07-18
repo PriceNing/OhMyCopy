@@ -11,6 +11,9 @@ pub const DEFAULT_UDP_PORT: u16 = 3721;
 pub const DEFAULT_MAX_PAYLOAD: u64 = 10 * 1024 * 1024; // 10 MiB
 pub const CONFIG_VERSION: u32 = 2;
 
+/// Historical insecure factory password — must not be used for pairing.
+pub const INSECURE_DEFAULT_PASSWORD: &str = "change-me";
+
 /// Protocol-fixed salt (v0.2 decision). Same on every node.
 pub const PROTOCOL_SALT: &[u8] = b"OhMyCopy-v1-fixed-salt-lan-psk";
 
@@ -49,7 +52,8 @@ impl Default for Config {
             device_id: Uuid::new_v4(),
             tcp_port: DEFAULT_TCP_PORT,
             udp_port: DEFAULT_UDP_PORT,
-            password: "change-me".into(),
+            // Fresh installs get a random password so two untouched devices cannot pair.
+            password: generate_random_password(),
             max_payload_bytes: DEFAULT_MAX_PAYLOAD,
             history_limit: 200,
             discover_interval_secs: 5,
@@ -64,6 +68,16 @@ impl Default for Config {
 }
 
 impl Config {
+    /// True if password is empty or the historical insecure default.
+    pub fn is_insecure_default_password(password: &str) -> bool {
+        let p = password.trim();
+        p.is_empty() || p == INSECURE_DEFAULT_PASSWORD
+    }
+
+    pub fn has_insecure_default_password(&self) -> bool {
+        Self::is_insecure_default_password(&self.password)
+    }
+
     /// Directory of the running executable (portable layout).
     /// Falls back to process current directory if `current_exe` is unavailable.
     pub fn config_dir() -> Result<PathBuf> {
@@ -206,8 +220,9 @@ impl Config {
         if self.device_name.trim().is_empty() {
             self.device_name = default_device_name();
         }
-        if self.password.is_empty() {
-            self.password = "change-me".into();
+        if self.password.trim().is_empty() {
+            // Never fall back to the public default; generate a unique one.
+            self.password = generate_random_password();
         }
         if self.tcp_port == 0 {
             self.tcp_port = DEFAULT_TCP_PORT;
@@ -273,6 +288,17 @@ fn exe_dir() -> Option<PathBuf> {
     Some(dir)
 }
 
+/// Random shared-password for new installs (`omc-` + 16 alnum chars).
+pub fn generate_random_password() -> String {
+    use rand::Rng;
+    const C: &[u8] = b"abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let mut rng = rand::thread_rng();
+    let body: String = (0..16)
+        .map(|_| C[rng.gen_range(0..C.len())] as char)
+        .collect();
+    format!("omc-{body}")
+}
+
 fn default_device_name() -> String {
     hostname::get()
         .ok()
@@ -330,6 +356,17 @@ mod tests {
         assert_eq!(loaded.password, "secret");
         assert_eq!(loaded.device_id, cfg.device_id);
         assert!(!loaded.start_minimized_to_tray);
+    }
+
+    #[test]
+    fn insecure_default_password_detected() {
+        assert!(Config::is_insecure_default_password("change-me"));
+        assert!(Config::is_insecure_default_password(""));
+        assert!(Config::is_insecure_default_password("  "));
+        assert!(!Config::is_insecure_default_password("omc-abc"));
+        let fresh = Config::default();
+        assert!(!Config::is_insecure_default_password(&fresh.password));
+        assert!(fresh.password.starts_with("omc-"));
     }
 
     #[test]

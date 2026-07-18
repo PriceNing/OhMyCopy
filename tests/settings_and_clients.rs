@@ -15,6 +15,8 @@ fn config_defaults_and_start_minimized_field() {
     assert!(!cfg.console);
     assert!(cfg.sync_enabled);
     assert_eq!(cfg.max_payload_bytes, 10 * 1024 * 1024);
+    // Fresh default must not use the public insecure password.
+    assert!(!Config::is_insecure_default_password(&cfg.password));
     cfg.start_minimized_to_tray = true;
     cfg.max_payload_bytes = 200 * 1024 * 1024;
     cfg.console = true;

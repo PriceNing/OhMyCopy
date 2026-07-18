@@ -836,10 +836,16 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                         max_payload,
                         start_minimized_to_tray,
                     } => {
+                        let (old_tcp, old_udp, old_pass) = {
+                            let cfg = config.lock();
+                            (cfg.tcp_port, cfg.udp_port, cfg.password.clone())
+                        };
+                        let port_changed = old_tcp != tcp_port || old_udp != udp_port;
+                        let pass_changed = old_pass != password;
                         let save_result = {
                             let mut cfg = config.lock();
                             cfg.device_name = device_name;
-                            cfg.password = password;
+                            cfg.password = password.clone();
                             cfg.tcp_port = tcp_port;
                             cfg.udp_port = udp_port;
                             cfg.max_payload_bytes = max_payload;
@@ -850,9 +856,38 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                             ui_s.lock().toast = Some(format!("保存失败: {e}"));
                         } else {
                             eng.lock().max_payload_bytes = max_payload;
+                            // Password can hot-reload for future handshakes; ports need restart.
+                            let mut notes: Vec<String> = Vec::new();
+                            if pass_changed {
+                                match hub_c.update_password(&password) {
+                                    Ok(()) => {
+                                        if ohmycopy::config::Config::is_insecure_default_password(
+                                            &password,
+                                        ) {
+                                            notes.push(
+                                                "密码已更新，但默认/空密码禁止配对与同步".into(),
+                                            );
+                                        } else {
+                                            notes.push(
+                                                "密码已热更新（新连接生效；已建立会话仍用旧密钥）"
+                                                    .into(),
+                                            );
+                                        }
+                                    }
+                                    Err(e) => notes.push(format!("密码热更新失败: {e}")),
+                                }
+                            }
+                            if port_changed {
+                                notes.push(format!(
+                                    "端口已写入配置（{tcp_port}/{udp_port}），必须重启应用后监听/发现才切换"
+                                ));
+                            }
+                            if notes.is_empty() {
+                                notes.push("设置已保存".into());
+                            }
                             let mut u = ui_s.lock();
                             u.start_minimized_to_tray = start_minimized_to_tray;
-                            u.toast = Some("设置已保存（网络相关项建议重启应用）".into());
+                            u.toast = Some(notes.join("；"));
                         }
                     }
                     UiCommand::AddManual(addr) => {

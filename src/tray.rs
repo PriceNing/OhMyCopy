@@ -24,6 +24,8 @@ pub enum TrayAction {
     ToggleSync,
 }
 
+type SyncCallback = Arc<dyn Fn(bool) + Send + Sync>;
+
 struct TrayShared {
     pending: Mutex<Vec<TrayAction>>,
     egui_ctx: Mutex<Option<egui::Context>>,
@@ -31,7 +33,7 @@ struct TrayShared {
     /// Mirrors UI/engine sync flag for menu handler (no need to wait for update).
     sync_enabled: AtomicBool,
     /// Called from tray/menu thread when user toggles sync.
-    on_sync: Mutex<Option<Arc<dyn Fn(bool) + Send + Sync>>>,
+    on_sync: Mutex<Option<SyncCallback>>,
 }
 
 pub struct AppTray {
@@ -157,7 +159,7 @@ impl AppTray {
     }
 
     /// Engine/UI bridge: apply sync from tray without waiting for egui frames.
-    pub fn set_on_sync(&self, f: Arc<dyn Fn(bool) + Send + Sync>) {
+    pub fn set_on_sync(&self, f: SyncCallback) {
         *self.shared.on_sync.lock() = Some(f);
     }
 

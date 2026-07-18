@@ -11,12 +11,14 @@
 //! ```
 //!
 //! Cleanup policy (runs after each write and on startup):
+//!
 //! - Max total size of inbox contents (default 256 MiB)
 //! - Max number of **top-level receipt folders** (default 80)
 //! - Max age of entries (default 7 days)
+//!
 //! Oldest modified receipt folders are removed first.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -29,6 +31,12 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 pub const INBOX_MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 pub const INBOX_MAX_ENTRIES: usize = 80;
 pub const INBOX_MAX_AGE: Duration = Duration::from_secs(7 * 24 * 3600);
+
+/// Zip-bomb / path-abuse limits applied **during** extract (before cleanup_inbox).
+pub const ZIP_MAX_ENTRIES: usize = 10_000;
+pub const ZIP_MAX_DEPTH: usize = 32;
+/// Uncompressed total written bytes (and zip-declared sizes).
+pub const ZIP_MAX_UNCOMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
 
 /// MIME for a directory packed as zip (receiver will extract to a folder).
 pub const MIME_DIR_ZIP: &str = "application/x-ohmycopy-dir-zip";
@@ -97,7 +105,10 @@ pub fn store_folder_zip(_event_prefix: &str, folder_name: &str, zip_bytes: &[u8]
     let receipt = new_receipt_dir()?;
     let root = receipt.join(sanitize_name(folder_name));
     fs::create_dir_all(&root)?;
-    extract_zip_to_dir(zip_bytes, &root)?;
+    if let Err(e) = extract_zip_to_dir(zip_bytes, &root) {
+        let _ = fs::remove_dir_all(&receipt);
+        return Err(e);
+    }
     cleanup_inbox(INBOX_MAX_TOTAL_BYTES, INBOX_MAX_ENTRIES, INBOX_MAX_AGE)?;
     Ok(root)
 }
@@ -210,21 +221,68 @@ fn zip_directory(dir: &Path, max_bytes: u64) -> Result<Vec<u8>> {
 fn extract_zip_to_dir(zip_bytes: &[u8], dest: &Path) -> Result<()> {
     let cursor = std::io::Cursor::new(zip_bytes);
     let mut archive = ZipArchive::new(cursor).context("open zip")?;
-    for i in 0..archive.len() {
+    let n_entries = archive.len();
+    if n_entries > ZIP_MAX_ENTRIES {
+        bail!(
+            "zip 条目过多（{n_entries} > {ZIP_MAX_ENTRIES}），已拒绝解压"
+        );
+    }
+
+    let mut declared_total: u64 = 0;
+    let mut written_total: u64 = 0;
+
+    for i in 0..n_entries {
         let mut file = archive.by_index(i).context("zip index")?;
         let name = file
             .enclosed_name()
             .map(|p| p.to_path_buf())
             .ok_or_else(|| anyhow::anyhow!("unsafe zip path"))?;
+
+        let depth = name.components().count();
+        if depth > ZIP_MAX_DEPTH {
+            bail!(
+                "zip 路径过深（{depth} > {ZIP_MAX_DEPTH}）: {}",
+                name.display()
+            );
+        }
+
         let out_path = dest.join(&name);
         if file.is_dir() {
             fs::create_dir_all(&out_path)?;
-        } else {
-            if let Some(parent) = out_path.parent() {
-                fs::create_dir_all(parent)?;
+            continue;
+        }
+
+        // Uncompressed size declared by the archive (zip-bomb signal).
+        let declared = file.size();
+        declared_total = declared_total.saturating_add(declared);
+        if declared_total > ZIP_MAX_UNCOMPRESSED_BYTES {
+            bail!(
+                "zip 声明的未压缩总量过大（{} > {}）",
+                declared_total,
+                ZIP_MAX_UNCOMPRESSED_BYTES
+            );
+        }
+
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut outfile = fs::File::create(&out_path)?;
+        // Copy with a hard written-byte cap (do not trust only declared size).
+        let mut buf = [0u8; 64 * 1024];
+        loop {
+            let n = file.read(&mut buf)?;
+            if n == 0 {
+                break;
             }
-            let mut outfile = fs::File::create(&out_path)?;
-            std::io::copy(&mut file, &mut outfile)?;
+            written_total = written_total.saturating_add(n as u64);
+            if written_total > ZIP_MAX_UNCOMPRESSED_BYTES {
+                bail!(
+                    "zip 实际解压字节超限（{} > {}）",
+                    written_total,
+                    ZIP_MAX_UNCOMPRESSED_BYTES
+                );
+            }
+            outfile.write_all(&buf[..n])?;
         }
     }
     Ok(())
@@ -287,18 +345,18 @@ pub fn cleanup_inbox(max_total: u64, max_entries: usize, max_age: Duration) -> R
         .into_iter()
         .flatten()
         .filter_map(|e| e.ok())
-        .filter_map(|e| {
+        .map(|e| {
             let path = e.path();
             let modified = e
                 .metadata()
                 .ok()
                 .and_then(|m| m.modified().ok())
                 .unwrap_or(SystemTime::UNIX_EPOCH);
-            Some(InboxEntry {
+            InboxEntry {
                 size: entry_size(&path),
                 path,
                 modified,
-            })
+            }
         })
         .collect();
 

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.35 — 2026-07-18
+
+### 安全与稳健
+
+- 握手帧硬顶 64KiB（未鉴权阶段不再可声明 512MiB 撑爆内存）
+- `AuthResponse.device_id` / `device_name` 必须与 Hello 一致
+- 文件夹 zip 解压限制条目数/深度/未压缩总量，失败清理 receipt
+- 新安装随机密码；`change-me`/空密码禁止配对与同步
+- 保存设置：密码热更新；端口明确需重启；设置页强提示
+
+### 质量
+
+- `cargo clippy --lib -- -D warnings` 通过；`FrameType::Unpair`
+
 ## 0.1.34 — 2026-07-18
 
 ### 功能

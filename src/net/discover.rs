@@ -201,7 +201,7 @@ impl DiscoveryService {
 
                     // Burst every 1s for ~12s, then back to configured interval.
                     let should_announce = tick_n <= 12
-                        || (tick_n % self.interval.as_secs().max(1) == 0);
+                        || tick_n.is_multiple_of(self.interval.as_secs().max(1));
                     if !should_announce {
                         continue;
                     }
@@ -227,7 +227,7 @@ impl DiscoveryService {
                             }
                         }
                     }
-                    if tick_n <= 3 || tick_n % 30 == 0 {
+                    if tick_n <= 3 || tick_n.is_multiple_of(30) {
                         tracing::info!(
                             targets = dests.len(),
                             ok,

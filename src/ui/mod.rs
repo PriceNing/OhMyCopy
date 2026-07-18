@@ -780,6 +780,14 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
             .color(t.text_muted),
         );
 
+        if crate::config::Config::is_insecure_default_password(&state.password) {
+            ui.add_space(10.0);
+            ui.colored_label(
+                egui::Color32::from_rgb(220, 80, 80),
+                "⚠ 当前密码为默认值或为空：禁止配对与剪贴板同步。请改成你自己的共享密码。",
+            );
+        }
+
         ui.add_space(12.0);
         ui.checkbox(
             &mut state.start_minimized_to_tray,
@@ -807,9 +815,11 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
         ui.separator();
         ui.add_space(8.0);
         ui.label(
-            egui::RichText::new("修改端口/密码后建议重启应用以使网络层完全重载。")
-                .small()
-                .color(t.text_muted),
+            egui::RichText::new(
+                "保存后：密码会热更新（新连接立即生效）。TCP/UDP 端口仅写入配置，必须重启应用后监听/发现才切换。",
+            )
+            .small()
+            .color(t.warning),
         );
         ui.add_space(4.0);
         ui.label(

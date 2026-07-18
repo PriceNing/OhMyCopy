@@ -23,6 +23,8 @@ const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
 /// Absolute max encrypted frame size (allows config max_payload up to ~480 MiB + AEAD/postcard overhead).
 const MAX_FRAME_BYTES: usize = 512 * 1024 * 1024;
+/// Pre-auth / handshake frames (Hello, Auth*) must stay small — never allocate up to MAX_FRAME_BYTES.
+const MAX_HANDSHAKE_FRAME_BYTES: usize = 64 * 1024;
 /// Floor for bulk transfer timeout (large files).
 const BULK_IO_MIN: Duration = Duration::from_secs(60);
 /// Cap bulk transfer timeout (very large / slow links).
@@ -78,7 +80,10 @@ struct LivePeer {
 pub struct NetworkHub {
     local_id: Uuid,
     local_name: String,
-    password_auth: AuthMaterial,
+    /// Shared-password material; can be replaced when user saves a new password.
+    password_auth: parking_lot::RwLock<AuthMaterial>,
+    /// When true, password is the insecure factory default — refuse pair / send.
+    insecure_password: std::sync::atomic::AtomicBool,
     engine: SharedEngine,
     peers_meta: Arc<RwLock<HashMap<Uuid, PeerInfo>>>,
     live: Arc<Mutex<HashMap<Uuid, LivePeer>>>,
@@ -113,7 +118,10 @@ impl NetworkHub {
         Ok(Self {
             local_id,
             local_name,
-            password_auth,
+            password_auth: parking_lot::RwLock::new(password_auth),
+            insecure_password: std::sync::atomic::AtomicBool::new(
+                crate::config::Config::is_insecure_default_password(password),
+            ),
             engine,
             peers_meta: Arc::new(RwLock::new(HashMap::new())),
             live: Arc::new(Mutex::new(HashMap::new())),
@@ -129,6 +137,32 @@ impl NetworkHub {
             listen_port,
             rt,
         })
+    }
+
+    /// Hot-update shared password for future handshakes (ports still need restart).
+    pub fn update_password(&self, password: &str) -> Result<()> {
+        let auth = AuthMaterial::from_password(password)?;
+        *self.password_auth.write() = auth;
+        self.insecure_password.store(
+            crate::config::Config::is_insecure_default_password(password),
+            std::sync::atomic::Ordering::SeqCst,
+        );
+        Ok(())
+    }
+
+    pub fn has_insecure_default_password(&self) -> bool {
+        self.insecure_password
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn refuse_if_insecure(&self) -> Result<()> {
+        if self.has_insecure_default_password() {
+            let _ = self.events.send(NetEvent::Toast(
+                "当前仍是默认密码，已禁止配对/同步。请在设置中修改共享密码。".into(),
+            ));
+            bail!("insecure default password");
+        }
+        Ok(())
     }
 
     pub fn is_ignored(&self, device_id: Uuid, addr: SocketAddr) -> bool {
@@ -227,6 +261,9 @@ impl NetworkHub {
         if device_id == self.local_id {
             return;
         }
+        if self.refuse_if_insecure().is_err() {
+            return;
+        }
         self.known.lock().insert(device_id, addr);
         let _ = self.events.send(NetEvent::Toast(format!("正在连接 {addr} …")));
         let hub = Arc::clone(self);
@@ -237,6 +274,9 @@ impl NetworkHub {
 
     /// Manual IP trial — same rules as discovery connect (persist only on success).
     pub fn trial_connect_addr(self: &Arc<Self>, addr: SocketAddr) {
+        if self.refuse_if_insecure().is_err() {
+            return;
+        }
         let _ = self
             .events
             .send(NetEvent::Toast(format!("正在连接 {addr} …")));
@@ -401,6 +441,9 @@ impl NetworkHub {
 
     /// Send a local clipboard event to all connected peers.
     pub fn broadcast_clipboard(&self, ev: ClipboardEvent) {
+        if self.refuse_if_insecure().is_err() {
+            return;
+        }
         self.relay_clipboard(&ev, None);
     }
 
@@ -732,6 +775,9 @@ impl NetworkHub {
         conn_addr: SocketAddr,
         we_dialed: bool,
     ) -> Result<()> {
+        // Insecure default password: refuse both dial and accept so two fresh installs cannot pair.
+        self.refuse_if_insecure()?;
+
         stream.set_nodelay(true)?;
         let (mut reader, mut writer) = stream.into_split();
 
@@ -743,6 +789,7 @@ impl NetworkHub {
         });
         write_raw_timeout(&mut writer, &hello.encode()?, HANDSHAKE_TIMEOUT).await?;
 
+        // Hello / Auth are unauthenticated — hard-cap frame size (DoS).
         let remote_hello = read_message_timeout(&mut reader, HANDSHAKE_TIMEOUT).await?;
         let (remote_id, remote_name, remote_listen_port) = match remote_hello {
             Message::Hello(h) => {
@@ -1016,6 +1063,9 @@ impl NetworkHub {
         R: AsyncReadExt + Unpin,
         W: AsyncWriteExt + Unpin,
     {
+        // Snapshot auth material (may hot-update mid-process).
+        let auth = self.password_auth.read().clone();
+
         if !we_dialed {
             let server_nonce = random_nonce();
             write_raw_timeout(
@@ -1030,20 +1080,10 @@ impl NetworkHub {
 
             match read_message_timeout(reader, HANDSHAKE_TIMEOUT).await? {
                 Message::AuthResponse(r) => {
-                    if !self.password_auth.verify_proof(&server_nonce, &r.proof) {
-                        self.upsert_meta(
-                            remote_id,
-                            remote_name.to_string(),
-                            addr,
-                            PeerStatus::AuthFailed,
-                            Some("密码不匹配".into()),
-                        )
-                        .await;
-                        let _ = self.events.send(NetEvent::PeerAuthFailed {
-                            device_id: remote_id,
-                            name: remote_name.to_string(),
-                            addr,
-                        });
+                    check_auth_identity(&r, remote_id, remote_name)?;
+                    if !auth.verify_proof(&server_nonce, &r.proof) {
+                        self.emit_auth_failed(remote_id, remote_name, addr, "密码不匹配")
+                            .await;
                         bail!("auth failed");
                     }
                 }
@@ -1054,7 +1094,7 @@ impl NetworkHub {
                 Message::AuthChallenge(c) => c.nonce,
                 _ => bail!("expected reverse AuthChallenge"),
             };
-            let proof = self.password_auth.prove(&client_nonce);
+            let proof = auth.prove(&client_nonce);
             write_raw_timeout(
                 writer,
                 &Message::AuthResponse(AuthResponse {
@@ -1067,15 +1107,13 @@ impl NetworkHub {
             )
             .await?;
 
-            Ok(self
-                .password_auth
-                .session_key(&client_nonce, &server_nonce))
+            Ok(auth.session_key(&client_nonce, &server_nonce))
         } else {
             let server_nonce = match read_message_timeout(reader, HANDSHAKE_TIMEOUT).await? {
                 Message::AuthChallenge(c) => c.nonce,
                 _ => bail!("expected AuthChallenge"),
             };
-            let proof = self.password_auth.prove(&server_nonce);
+            let proof = auth.prove(&server_nonce);
             write_raw_timeout(
                 writer,
                 &Message::AuthResponse(AuthResponse {
@@ -1101,31 +1139,60 @@ impl NetworkHub {
 
             match read_message_timeout(reader, HANDSHAKE_TIMEOUT).await? {
                 Message::AuthResponse(r) => {
-                    if !self.password_auth.verify_proof(&client_nonce, &r.proof) {
-                        self.upsert_meta(
-                            remote_id,
-                            remote_name.to_string(),
-                            addr,
-                            PeerStatus::AuthFailed,
-                            Some("密码不匹配".into()),
-                        )
-                        .await;
-                        let _ = self.events.send(NetEvent::PeerAuthFailed {
-                            device_id: remote_id,
-                            name: remote_name.to_string(),
-                            addr,
-                        });
+                    check_auth_identity(&r, remote_id, remote_name)?;
+                    if !auth.verify_proof(&client_nonce, &r.proof) {
+                        self.emit_auth_failed(remote_id, remote_name, addr, "密码不匹配")
+                            .await;
                         bail!("auth reverse failed");
                     }
                 }
                 _ => bail!("expected reverse AuthResponse"),
             }
 
-            Ok(self
-                .password_auth
-                .session_key(&client_nonce, &server_nonce))
+            Ok(auth.session_key(&client_nonce, &server_nonce))
         }
     }
+
+    async fn emit_auth_failed(
+        &self,
+        remote_id: Uuid,
+        remote_name: &str,
+        addr: SocketAddr,
+        msg: &str,
+    ) {
+        self.upsert_meta(
+            remote_id,
+            remote_name.to_string(),
+            addr,
+            PeerStatus::AuthFailed,
+            Some(msg.into()),
+        )
+        .await;
+        let _ = self.events.send(NetEvent::PeerAuthFailed {
+            device_id: remote_id,
+            name: remote_name.to_string(),
+            addr,
+        });
+    }
+}
+
+/// AuthResponse must match the identity claimed in plaintext Hello.
+fn check_auth_identity(r: &AuthResponse, remote_id: Uuid, remote_name: &str) -> Result<()> {
+    if r.device_id != remote_id {
+        bail!(
+            "AuthResponse device_id 与 Hello 不一致（{} != {}）",
+            r.device_id,
+            remote_id
+        );
+    }
+    if r.device_name != remote_name {
+        bail!(
+            "AuthResponse device_name 与 Hello 不一致（{:?} != {:?}）",
+            r.device_name,
+            remote_name
+        );
+    }
+    Ok(())
 }
 
 async fn write_raw_timeout<W: AsyncWriteExt + Unpin>(
@@ -1155,10 +1222,12 @@ async fn write_raw_timeout<W: AsyncWriteExt + Unpin>(
 /// Read one length-prefixed frame.
 /// `idle_or_total`: used while waiting for the 4-byte length (and as floor for small frames).
 /// `body_timeout_for`: once length is known, bulk body uses a size-based timeout.
-async fn read_raw_timeout<R: AsyncReadExt + Unpin>(
+/// `max_frame`: hard cap before allocating the body buffer (handshake vs session).
+async fn read_raw_timeout_max<R: AsyncReadExt + Unpin>(
     r: &mut R,
     idle_or_total: Duration,
     body_timeout_for: impl Fn(usize) -> Duration,
+    max_frame: usize,
 ) -> Result<Vec<u8>> {
     let mut len_buf = [0u8; 4];
     tokio::time::timeout(idle_or_total, r.read_exact(&mut len_buf))
@@ -1166,9 +1235,9 @@ async fn read_raw_timeout<R: AsyncReadExt + Unpin>(
         .map_err(|_| anyhow::anyhow!("read timeout (waiting for frame header)"))?
         .context("read frame length")?;
     let len = u32::from_le_bytes(len_buf) as usize;
-    if len > MAX_FRAME_BYTES {
+    if len > max_frame {
         return Err(anyhow::anyhow!(
-            "frame too large: {len} > max {MAX_FRAME_BYTES}"
+            "frame too large: {len} > max {max_frame}"
         ));
     }
     if len == 0 {
@@ -1195,11 +1264,20 @@ async fn read_raw_timeout<R: AsyncReadExt + Unpin>(
     Ok(body)
 }
 
+async fn read_raw_timeout<R: AsyncReadExt + Unpin>(
+    r: &mut R,
+    idle_or_total: Duration,
+    body_timeout_for: impl Fn(usize) -> Duration,
+) -> Result<Vec<u8>> {
+    read_raw_timeout_max(r, idle_or_total, body_timeout_for, MAX_FRAME_BYTES).await
+}
+
 async fn read_message_timeout<R: AsyncReadExt + Unpin>(
     r: &mut R,
     timeout: Duration,
 ) -> Result<Message> {
-    // Handshake messages are small — same timeout for header and body.
-    let body = read_raw_timeout(r, timeout, |_| timeout).await?;
+    // Handshake messages are small — never allocate multi-hundred-MiB buffers.
+    let body =
+        read_raw_timeout_max(r, timeout, |_| timeout, MAX_HANDSHAKE_FRAME_BYTES).await?;
     Ok(Message::decode(&body)?)
 }
