@@ -285,9 +285,14 @@ pub fn spawn_startup_hide_guard(title: &'static str) {
     std::thread::Builder::new()
         .name("ohmycopy-hide-guard".into())
         .spawn(move || {
-            // ~2s of aggressive hide while winit/eframe create the HWND.
-            for _ in 0..100 {
+            // Also keep any console hidden (should not exist for GUI builds).
+            crate::console_win::hide_early();
+            // ~3s of aggressive hide while winit/eframe create the HWND.
+            for i in 0..150 {
                 let _ = win32_set_window_visible_quiet(title, false);
+                if i % 5 == 0 {
+                    crate::console_win::hide_early();
+                }
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
         })

@@ -1,4 +1,21 @@
 //! Windows console show/hide for portable GUI apps.
+//!
+//! Default binary is `windows_subsystem = "windows"` (no console).
+//! Only allocate a console when the user opts in (`console: true` / headless).
+
+/// Hide console as early as possible (call at the very start of `main`).
+/// Safe if there is no console.
+#[cfg(windows)]
+pub fn hide_early() {
+    unsafe {
+        let hwnd = GetConsoleWindow();
+        if !hwnd.is_null() {
+            // Hide first — FreeConsole alone can briefly flash on some systems.
+            ShowWindow(hwnd, SW_HIDE);
+        }
+        let _ = FreeConsole();
+    }
+}
 
 /// Show or hide the process console window.
 ///
@@ -8,8 +25,10 @@
 pub fn set_visible(show: bool) {
     unsafe {
         if show {
-            // Create console if this is a windows-subsystem binary, or re-show existing.
-            let _ = AllocConsole();
+            let existing = GetConsoleWindow();
+            if existing.is_null() {
+                let _ = AllocConsole();
+            }
             let hwnd = GetConsoleWindow();
             if !hwnd.is_null() {
                 ShowWindow(hwnd, SW_SHOW);
@@ -19,14 +38,13 @@ pub fn set_visible(show: bool) {
             let _ = freopen(c"CONOUT$".as_ptr(), c"w".as_ptr(), stderr_ptr());
             let _ = freopen(c"CONIN$".as_ptr(), c"r".as_ptr(), stdin_ptr());
         } else {
-            let hwnd = GetConsoleWindow();
-            if !hwnd.is_null() {
-                ShowWindow(hwnd, SW_HIDE);
-            }
-            let _ = FreeConsole();
+            hide_early();
         }
     }
 }
+
+#[cfg(not(windows))]
+pub fn hide_early() {}
 
 #[cfg(not(windows))]
 pub fn set_visible(_show: bool) {
@@ -44,6 +62,11 @@ unsafe extern "system" {
     fn AllocConsole() -> i32;
     fn FreeConsole() -> i32;
     fn GetConsoleWindow() -> *mut core::ffi::c_void;
+}
+
+#[cfg(windows)]
+#[link(name = "user32")]
+unsafe extern "system" {
     fn ShowWindow(hwnd: *mut core::ffi::c_void, n_cmd_show: i32) -> i32;
 }
 

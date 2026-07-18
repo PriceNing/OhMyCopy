@@ -8,6 +8,16 @@ use tracing_subscriber::EnvFilter;
 mod app;
 
 fn main() {
+    // Kill any inherited console flash *before* config load / GUI init.
+    // (windows_subsystem=windows normally has no console; this is belt-and-suspenders.)
+    let force_headless_early = std::env::args().any(|a| a == "--headless" || a == "-H")
+        || std::env::var_os("OHMYCOPY_HEADLESS").is_some();
+    let force_console_early = std::env::args().any(|a| a == "--console")
+        || std::env::var_os("OHMYCOPY_CONSOLE").is_some();
+    if !force_headless_early && !force_console_early {
+        ohmycopy::console_win::hide_early();
+    }
+
     // Always capture a useful panic location (even without RUST_BACKTRACE).
     std::panic::set_hook(Box::new(|info| {
         let location = info
@@ -57,12 +67,19 @@ fn main() {
 fn real_main() -> Result<()> {
     let force_headless = std::env::args().any(|a| a == "--headless" || a == "-H")
         || std::env::var_os("OHMYCOPY_HEADLESS").is_some();
+    let force_console = std::env::args().any(|a| a == "--console")
+        || std::env::var_os("OHMYCOPY_CONSOLE").is_some();
 
     // Load config first so we know whether to show a console.
     let cfg = ohmycopy::config::Config::load_or_create()?;
-    // Headless always needs a console for status lines.
-    let show_console = cfg.console || force_headless;
-    ohmycopy::console_win::set_visible(show_console);
+    // Headless / explicit console: show black console. Default GUI: never.
+    let show_console = force_console || force_headless || cfg.console;
+    if show_console {
+        ohmycopy::console_win::set_visible(true);
+    } else {
+        // Hide again after config load (in case anything reattached).
+        ohmycopy::console_win::hide_early();
+    }
 
     tracing_subscriber::fmt()
         .with_env_filter(
