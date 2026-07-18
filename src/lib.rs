@@ -6,6 +6,7 @@ pub mod config;
 pub mod console_win;
 pub mod engine;
 pub mod history;
+pub mod i18n;
 pub mod icon;
 pub mod inbox;
 pub mod net;

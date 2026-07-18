@@ -67,6 +67,8 @@ enum UiCommand {
     ClearHistory,
     CopyText(String),
     SetSync(bool),
+    /// Immediate language persist (hot-reload already applied in UI thread).
+    SetLanguage(String),
 }
 
 const TOAST_FRAMES: u32 = 20; // ~4s at 200ms repaint
@@ -83,7 +85,15 @@ pub fn run() -> Result<()> {
 }
 
 /// Entry used by `main` after console visibility has been applied.
+///
+/// Headless and GUI share this setup (config, engine, history, clipboard, hub,
+/// discovery, clipboard watcher). Only the presentation surface forks later:
+/// `run_gui` vs `run_headless`. Keep sync/network/config behavior identical.
 pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
+    // Language: config → system locale → English (built-in base is English).
+    let lang = ohmycopy::i18n::init_from_config(&cfg_snap.language);
+    tracing::info!(language = %lang, "i18n ready");
+
     let config = Arc::new(Mutex::new(cfg_snap.clone()));
 
     let engine: SharedEngine = Arc::new(Mutex::new(EngineCore::new(
@@ -117,8 +127,9 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
     initial_ui.sync_enabled = cfg_snap.sync_enabled;
     initial_ui.start_minimized_to_tray = cfg_snap.start_minimized_to_tray;
     initial_ui.auto_start = cfg_snap.auto_start;
+    initial_ui.language = lang;
     initial_ui.history = history.lock().list("", 100).unwrap_or_default();
-    initial_ui.status_line = format!("本机：{}", cfg_snap.device_name);
+    initial_ui.status_line = ohmycopy::i18n::t_args("app.local_device", &[("name", &cfg_snap.device_name)]);
     let ui_shared = Arc::new(Mutex::new(initial_ui));
 
     // Keep OS login item in sync with config (e.g. after migrate / manual json edit).
@@ -289,7 +300,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                 };
                                 let mut u = ui_s.lock();
                                 u.history = preview;
-                                u.toast = Some("已收到对方的文字".into());
+                                u.toast = Some(ohmycopy::i18n::t("toast.text_received"));
                             }
                             ContentKind::File => {
                                 let name = ev
@@ -319,7 +330,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                         Err(e) => {
                                             tracing::warn!(error = %e, "extract folder zip");
                                             ui_s.lock().toast =
-                                                Some(format!("收到文件夹，但保存失败：{e}"));
+                                                Some(ohmycopy::i18n::t_args("toast.folder_save_fail", &[("error", &e.to_string())]));
                                             continue;
                                         }
                                     }
@@ -329,7 +340,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                         Err(e) => {
                                             tracing::warn!(error = %e, "store inbox file");
                                             ui_s.lock().toast =
-                                                Some(format!("收到文件，但保存失败：{e}"));
+                                                Some(ohmycopy::i18n::t_args("toast.file_save_fail", &[("error", &e.to_string())]));
                                             continue;
                                         }
                                     }
@@ -367,20 +378,23 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                                 clip.set_files_from_sync(&[dest.clone()])
                                             {
                                                 tracing::warn!(error = %e, "set clipboard files");
-                                                ui_s.lock().toast = Some(format!(
-                                                    "文件已保存，但复制到剪贴板失败：{e}"
+                                                ui_s.lock().toast = Some(ohmycopy::i18n::t_args(
+                                                    "toast.file_clip_fail",
+                                                    &[("error", &e.to_string())],
                                                 ));
                                             }
                                         }
                                     }
                                 } else if let Err(e) = clip.set_files_from_sync(&[dest.clone()]) {
                                     tracing::warn!(error = %e, "set clipboard files");
-                                    ui_s.lock().toast =
-                                        Some(format!("文件已保存，但复制到剪贴板失败：{e}"));
+                                    ui_s.lock().toast = Some(ohmycopy::i18n::t_args(
+                                        "toast.file_clip_fail",
+                                        &[("error", &e.to_string())],
+                                    ));
                                 }
                                 // Pass base name only — history layer formats the list title.
                                 let list_name = if is_folder {
-                                    format!("文件夹 {display_name}")
+                                    ohmycopy::i18n::t_args("toast.folder_label", &[("name", &display_name)])
                                 } else {
                                     display_name.clone()
                                 };
@@ -410,9 +424,9 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                 let mut u = ui_s.lock();
                                 u.history = preview;
                                 u.toast = Some(if is_folder {
-                                    format!("已收到文件夹：{display_name}")
+                                    ohmycopy::i18n::t_args("toast.folder_received", &[("name", &display_name)])
                                 } else {
-                                    format!("已收到文件：{display_name}")
+                                    ohmycopy::i18n::t_args("toast.file_received", &[("name", &display_name)])
                                 });
                             }
                             ContentKind::Image => {
@@ -421,14 +435,14 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                     Err(e) => {
                                         tracing::warn!(error = %e, "decode remote png");
                                         ui_s.lock().toast =
-                                            Some(format!("图片无法显示：{e}"));
+                                            Some(ohmycopy::i18n::t_args("toast.image_display_fail", &[("error", &e.to_string())]));
                                         continue;
                                     }
                                 };
                                 if let Err(e) = clip.set_image_from_sync(img_w, img_h, rgba) {
                                     tracing::warn!(error = %e, "set clipboard image");
                                     ui_s.lock().toast =
-                                        Some(format!("图片复制到剪贴板失败：{e}"));
+                                        Some(ohmycopy::i18n::t_args("toast.image_clip_fail", &[("error", &e.to_string())]));
                                     continue;
                                 }
                                 let fname = ev
@@ -468,7 +482,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                 };
                                 let mut u = ui_s.lock();
                                 u.history = preview;
-                                u.toast = Some(format!("已收到图片（{dim}）"));
+                                u.toast = Some(ohmycopy::i18n::t_args("toast.image_received", &[("dim", &dim)]));
                             }
                         }
                     }
@@ -505,7 +519,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                 n.device_id != device_id.to_string()
                                     && n.addr != addr.to_string()
                             });
-                            u.toast = Some(format!("已连接「{name}」，可以同步了"));
+                            u.toast = Some(ohmycopy::i18n::t_args("toast.device_connected", &[("name", &name)]));
                         }
                         tracing::info!(%device_id, %addr, %name, we_dialed, "mutual pair saved");
                     }
@@ -521,11 +535,15 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                         };
                         let mut u = ui_s.lock();
                         if was_trial {
-                            u.toast = Some(format!(
-                                "密码不正确，未能连接「{name}」。请确认双方密码一致。"
+                            u.toast = Some(ohmycopy::i18n::t_args(
+                                "toast.auth_fail_detail",
+                                &[("name", &name)],
                             ));
                         } else {
-                            u.toast = Some(format!("与「{name}」密码不一致，连接失败"));
+                            u.toast = Some(ohmycopy::i18n::t_args(
+                                "toast.auth_fail_short",
+                                &[("name", &name)],
+                            ));
                         }
                         let _ = (device_id, addr);
                     }
@@ -543,9 +561,9 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                             let mut u = ui_s.lock();
                             u.saved_clients = cf.clients.clone();
                             u.toast = Some(if from_remote {
-                                format!("「{name}」已断开，并从列表中移除")
+                                ohmycopy::i18n::t_args("toast.device_removed_peer", &[("name", &name)])
                             } else {
-                                format!("已与「{name}」断开连接")
+                                ohmycopy::i18n::t_args("toast.device_disconnected", &[("name", &name)])
                             });
                         }
                         hub_e.remove_client_silent(Some(device_id), addr);
@@ -654,9 +672,9 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                             let mut core = eng.lock();
                             if core.note_oversize_local(text.len() as u64) {
                                 drop(core);
-                                ui_c.lock().toast = Some(format!(
-                                    "这段文字太大（约 {} KB），超过本机上限，未同步。可在设置中提高「单次同步上限」。",
-                                    text.len() / 1024
+                                ui_c.lock().toast = Some(ohmycopy::i18n::t_args(
+                                    "toast.text_oversize",
+                                    &[("kb", &(text.len() / 1024).to_string())],
                                 ));
                                 return;
                             }
@@ -671,7 +689,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                             {
                                 let mut u = ui_c.lock();
                                 u.history = preview;
-                                u.toast = Some("文字已同步到其他设备".into());
+                                u.toast = Some(ohmycopy::i18n::t("toast.text_synced"));
                             }
                             hub_c.broadcast_clipboard(ev);
                         }
@@ -685,16 +703,16 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                             Ok(p) => p,
                             Err(e) => {
                                 ui_c.lock().toast =
-                                    Some(format!("图片处理失败：{e}"));
+                                    Some(ohmycopy::i18n::t_args("toast.image_process_fail", &[("error", &e.to_string())]));
                                 return;
                             }
                         };
                         let size = png.len() as u64;
                         let max = eng.lock().max_payload_bytes;
                         if size > max {
-                            ui_c.lock().toast = Some(format!(
-                                "图片过大（约 {} MB），超过本机上限，未同步。可在设置中提高「单次同步上限」。",
-                                size / (1024 * 1024)
+                            ui_c.lock().toast = Some(ohmycopy::i18n::t_args(
+                                "toast.image_oversize",
+                                &[("mb", &(size / (1024 * 1024)).to_string())],
                             ));
                             return;
                         }
@@ -735,8 +753,12 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                             {
                                 let mut u = ui_c.lock();
                                 u.history = preview;
-                                u.toast = Some(format!(
-                                    "图片已同步到其他设备（{width}×{height}）"
+                                u.toast = Some(ohmycopy::i18n::t_args(
+                                    "toast.image_synced",
+                                    &[
+                                        ("width", &width.to_string()),
+                                        ("height", &height.to_string()),
+                                    ],
                                 ));
                             }
                             hub_c.broadcast_clipboard(ev);
@@ -750,7 +772,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                 Ok(t) => t,
                                 Err(e) => {
                                     ui_c.lock().toast =
-                                        Some(format!("无法读取文件：{e}"));
+                                        Some(ohmycopy::i18n::t_args("toast.file_read_fail", &[("error", &e.to_string())]));
                                     continue;
                                 }
                             };
@@ -777,7 +799,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                             };
                             if let Some(ev) = ev {
                                 let list_name = if is_dir {
-                                    format!("文件夹 {base_name}")
+                                    ohmycopy::i18n::t_args("toast.folder_label", &[("name", &base_name)])
                                 } else {
                                     base_name.clone()
                                 };
@@ -797,9 +819,9 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                     let mut u = ui_c.lock();
                                     u.history = preview;
                                     u.toast = Some(if is_dir {
-                                        format!("文件夹已同步：{base_name}")
+                                        ohmycopy::i18n::t_args("toast.folder_synced", &[("name", &base_name)])
                                     } else {
-                                        format!("文件已同步：{base_name}")
+                                        ohmycopy::i18n::t_args("toast.file_synced", &[("name", &base_name)])
                                     });
                                 }
                                 hub_c.broadcast_clipboard(ev);
@@ -858,7 +880,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                             cfg.save()
                         };
                         if let Err(e) = save_result {
-                            ui_s.lock().toast = Some(format!("保存失败：{e}"));
+                            ui_s.lock().toast = Some(ohmycopy::i18n::t_args("toast.save_fail", &[("error", &e.to_string())]));
                         } else {
                             eng.lock().max_payload_bytes = max_payload;
                             // Password can hot-reload for future handshakes; ports need restart.
@@ -870,35 +892,34 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                             &password,
                                         ) {
                                             notes.push(
-                                                "密码已保存，但当前密码不安全，仍无法配对同步"
-                                                    .into(),
+                                                ohmycopy::i18n::t("toast.password_insecure"),
                                             );
                                         } else {
                                             notes.push(
-                                                "密码已更新，之后新连接将使用新密码".into(),
+                                                ohmycopy::i18n::t("toast.password_updated"),
                                             );
                                         }
                                     }
-                                    Err(e) => notes.push(format!("密码更新失败：{e}")),
+                                    Err(e) => notes.push(ohmycopy::i18n::t_args("toast.password_update_fail", &[("error", &e.to_string())])),
                                 }
                             }
                             if port_changed {
                                 notes.push(
-                                    "端口已保存，请重启本软件后生效".into(),
+                                    ohmycopy::i18n::t("toast.port_restart"),
                                 );
                             }
                             if auto_changed || auto_start {
                                 match ohmycopy::autostart::apply(auto_start) {
                                     Ok(()) => notes.push(if auto_start {
-                                        "已开启开机自动启动".into()
+                                        ohmycopy::i18n::t("toast.autostart_on")
                                     } else {
-                                        "已关闭开机自动启动".into()
+                                        ohmycopy::i18n::t("toast.autostart_off")
                                     }),
-                                    Err(e) => notes.push(format!("自动启动设置失败：{e}")),
+                                    Err(e) => notes.push(ohmycopy::i18n::t_args("toast.autostart_fail", &[("error", &e.to_string())])),
                                 }
                             }
                             if notes.is_empty() {
-                                notes.push("设置已保存".into());
+                                notes.push(ohmycopy::i18n::t("toast.settings_saved"));
                             }
                             let mut u = ui_s.lock();
                             u.start_minimized_to_tray = start_minimized_to_tray;
@@ -940,7 +961,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                             let _ = cf.save();
                             ui_s.lock().saved_clients = cf.clients.clone();
                             ui_s.lock().toast =
-                                Some(format!("已移除设备 {addr}"));
+                                Some(ohmycopy::i18n::t_args("toast.device_removed", &[("addr", &addr.to_string())]));
                         }
                         hub_c.remove_client(device_id, addr); // notifies + disconnects
                         hub_c.set_ignored(device_id, addr, false);
@@ -957,9 +978,9 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                             }
                             ui_s.lock().saved_clients = cf.clients.clone();
                             ui_s.lock().toast = Some(if ignored {
-                                format!("已暂停与 {addr} 的剪贴板同步")
+                                ohmycopy::i18n::t_args("toast.ignore_on", &[("addr", &addr.to_string())])
                             } else {
-                                format!("已恢复与 {addr} 的剪贴板同步")
+                                ohmycopy::i18n::t_args("toast.ignore_off", &[("addr", &addr.to_string())])
                             });
                         }
                         hub_c.set_ignored(device_id, addr, ignored);
@@ -972,11 +993,11 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                 *cf = fresh;
                                 ui_s.lock().saved_clients = cf.clients.clone();
                                 ui_s.lock().toast =
-                                    Some("设备列表已刷新".into());
+                                    Some(ohmycopy::i18n::t("toast.clients_refreshed"));
                             }
                             Err(e) => {
                                 ui_s.lock().toast =
-                                    Some(format!("刷新设备列表失败：{e}"));
+                                    Some(ohmycopy::i18n::t_args("toast.clients_refresh_fail", &[("error", &e.to_string())]));
                             }
                         }
                     }
@@ -986,17 +1007,43 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                         let mut u = ui_s.lock();
                         u.history.clear();
                         u.toast = Some(match (hist_ok, inbox_res) {
-                            (true, Ok(())) => "历史记录和接收的临时文件已清空".into(),
+                            (true, Ok(())) => ohmycopy::i18n::t("toast.history_cleared"),
                             (true, Err(e)) => {
-                                format!("历史已清空，但清理接收文件失败：{e}")
+                                ohmycopy::i18n::t_args("toast.history_clear_inbox_fail", &[("error", &e.to_string())])
                             }
                             (false, Ok(())) => {
-                                "接收文件已清空，但历史记录清理可能失败".into()
+                                ohmycopy::i18n::t("toast.inbox_clear_history_fail")
                             }
                             (false, Err(e)) => {
-                                format!("清空失败：{e}")
+                                ohmycopy::i18n::t_args("toast.clear_fail", &[("error", &e.to_string())])
                             }
                         });
+                    }
+                    UiCommand::SetLanguage(code) => {
+                        let code = ohmycopy::i18n::normalize_lang_code(&code);
+                        let ok = ohmycopy::i18n::set_language(&code);
+                        if ok {
+                            let mut cfg = config.lock();
+                            cfg.language = code.clone();
+                            if let Err(e) = cfg.save() {
+                                ui_s.lock().toast = Some(ohmycopy::i18n::t_args(
+                                    "toast.save_fail",
+                                    &[("error", &e.to_string())],
+                                ));
+                            } else {
+                                let name = ohmycopy::i18n::available_languages()
+                                    .into_iter()
+                                    .find(|(c, _)| c == &code)
+                                    .map(|(_, n)| n)
+                                    .unwrap_or_else(|| code.clone());
+                                let mut u = ui_s.lock();
+                                u.language = code;
+                                u.toast = Some(ohmycopy::i18n::t_args(
+                                    "toast.language_changed",
+                                    &[("name", &name)],
+                                ));
+                            }
+                        }
                     }
                     UiCommand::CopyText(text) => {
                         // History re-copy: file/folder/image rows store local path in content.
@@ -1012,25 +1059,25 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                     Ok(bytes) => match png_to_rgba(&bytes) {
                                         Ok((w, h, rgba)) => clip
                                             .set_image_local(w, h, rgba)
-                                            .map(|_| "图片已复制，可以粘贴了".to_string()),
+                                            .map(|_| ohmycopy::i18n::t("toast.image_copied")),
                                         Err(e) => Err(e),
                                     },
                                     Err(e) => Err(anyhow::anyhow!(e)),
                                 }
                             } else {
                                 clip.set_files_from_sync(&[path])
-                                    .map(|_| "已复制到剪贴板".to_string())
+                                    .map(|_| ohmycopy::i18n::t("toast.copied"))
                             }
                         } else if path.is_dir() {
                             clip.set_files_from_sync(&[path])
-                                .map(|_| "已复制到剪贴板".to_string())
+                                .map(|_| ohmycopy::i18n::t("toast.copied"))
                         } else {
                             clip.set_text_local(&text)
-                                .map(|_| "已复制到剪贴板".to_string())
+                                .map(|_| ohmycopy::i18n::t("toast.copied"))
                         };
                         match result {
                             Ok(msg) => ui_s.lock().toast = Some(msg),
-                            Err(e) => ui_s.lock().toast = Some(format!("复制失败: {e}")),
+                            Err(e) => ui_s.lock().toast = Some(ohmycopy::i18n::t_args("toast.copy_fail", &[("error", &e.to_string())])),
                         }
                     }
                     UiCommand::SetSync(enabled) => {
@@ -1066,10 +1113,13 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                 // Headless needs a visible console for status.
                 ohmycopy::console_win::set_visible(true);
                 eprintln!();
-                eprintln!("图形界面无法启动（本机无可用 OpenGL 2.0+ / wgpu 适配器）。");
-                eprintln!("错误: {gui_err}");
-                eprintln!("自动切换为【无界面模式】—— 剪贴板同步继续运行。");
-                eprintln!("提示: 也可使用参数 --headless 或环境变量 OHMYCOPY_HEADLESS=1 直接进入。");
+                eprintln!("{}", ohmycopy::i18n::t("gui_fail.no_adapter"));
+                eprintln!(
+                    "{}",
+                    ohmycopy::i18n::t_args("gui_fail.error", &[("error", &gui_err.to_string())])
+                );
+                eprintln!("{}", ohmycopy::i18n::t("gui_fail.fallback"));
+                eprintln!("{}", ohmycopy::i18n::t("gui_fail.hint"));
                 eprintln!();
                 run_headless(&hub, &cfg_snap, &shutdown_flag)
             }
@@ -1104,23 +1154,60 @@ fn run_headless(
             .ok();
     }
 
+    // Headless uses the same hub/clipboard/engine started in run_with_config
+    // before this branch — only the presentation surface differs from GUI.
     println!("====================================================");
     println!(
-        " OhMyCopy {}  ·  无界面模式 (headless)",
-        env!("CARGO_PKG_VERSION")
+        " {}",
+        ohmycopy::i18n::t_args(
+            "headless.title",
+            &[("version", env!("CARGO_PKG_VERSION"))],
+        )
     );
     println!("----------------------------------------------------");
-    println!(" 设备名称 : {}", cfg.device_name);
-    println!(" 设备 ID  : {}", cfg.device_id);
-    println!(" 监听端口 : TCP/UDP {}", cfg.tcp_port);
-    println!(" 同步开关 : {}", if cfg.sync_enabled { "开" } else { "关" });
-    println!(" 工作目录 : {:?}", Config::config_dir().ok());
-    println!(" （与 exe 同目录）config.json / clients.json / history.db");
+    println!(
+        " {}",
+        ohmycopy::i18n::t_args("headless.device_name", &[("name", &cfg.device_name)])
+    );
+    println!(
+        " {}",
+        ohmycopy::i18n::t_args("headless.device_id", &[("id", &cfg.device_id.to_string())])
+    );
+    println!(
+        " {}",
+        ohmycopy::i18n::t_args(
+            "headless.listen",
+            &[("port", &cfg.tcp_port.to_string())],
+        )
+    );
+    let sync_state = if cfg.sync_enabled {
+        ohmycopy::i18n::t("headless.on")
+    } else {
+        ohmycopy::i18n::t("headless.off")
+    };
+    println!(
+        " {}",
+        ohmycopy::i18n::t_args("headless.sync", &[("state", &sync_state)])
+    );
+    let work = Config::config_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "?".into());
+    println!(
+        " {}",
+        ohmycopy::i18n::t_args("headless.work_dir", &[("path", &work)])
+    );
+    println!(" {}", ohmycopy::i18n::t("headless.work_dir_hint"));
     println!("----------------------------------------------------");
-    println!(" 剪贴板同步已在后台运行；请确保各设备共享密码一致。");
-    println!(" 可在 clients.json 中设置 auto_connect=true 自动连接。");
-    println!(" 有 GUI 的电脑上点「连接」连到本机 IP:{}", cfg.tcp_port);
-    println!(" 按 Ctrl+C 退出（或关闭此控制台窗口）");
+    println!(" {}", ohmycopy::i18n::t("headless.running"));
+    println!(" {}", ohmycopy::i18n::t("headless.clients_hint"));
+    println!(
+        " {}",
+        ohmycopy::i18n::t_args(
+            "headless.connect_hint",
+            &[("port", &cfg.tcp_port.to_string())],
+        )
+    );
+    println!(" {}", ohmycopy::i18n::t("headless.ctrl_c"));
     println!("====================================================");
 
     let mut tick = 0u64;
@@ -1131,15 +1218,21 @@ fn run_headless(
             // every ~10s
             let summary = hub.status_summary();
             let n = hub.connected_count();
+            let time = chrono::Local::now().format("%H:%M:%S").to_string();
             println!(
-                "[{}] {} (会话 {})",
-                chrono::Local::now().format("%H:%M:%S"),
-                summary,
-                n
+                " {}",
+                ohmycopy::i18n::t_args(
+                    "headless.tick",
+                    &[
+                        ("time", &time),
+                        ("summary", &summary),
+                        ("n", &n.to_string()),
+                    ],
+                )
             );
         }
     }
-    println!("正在退出无界面模式…");
+    println!(" {}", ohmycopy::i18n::t("headless.exiting"));
     Ok(())
 }
 
@@ -1290,9 +1383,9 @@ fn select_wgpu_adapter(
         tracing::info!(name = %a.get_info().name, "selected fallback adapter");
         return Ok(a.clone());
     }
-    Err(format!(
-        "未找到可用图形适配器。已枚举: {}",
-        infos.join(", ")
+    Err(ohmycopy::i18n::t_args(
+        "gui_fail.no_adapter_listed",
+        &[("list", &infos.join(", "))],
     ))
 }
 
@@ -1445,9 +1538,8 @@ fn run_gui(
         )
         .map_err(|e| {
             anyhow::anyhow!(
-                "图形界面启动失败（本机可能无可用 GPU/OpenGL/WARP）。\n\
-                 详情: {e}\n\
-                 建议: 安装显卡驱动，或确认 Windows 自带 Microsoft Basic Render Driver (WARP) 可用。"
+                "{}",
+                ohmycopy::i18n::t_args("gui_fail.detail", &[("error", &e.to_string())])
             )
         })
     }
@@ -1627,6 +1719,7 @@ impl eframe::App for AppShell {
         self.inner.ui.cmd_clear_history = false;
         self.inner.ui.cmd_copy_history = None;
         self.inner.ui.cmd_toggle_sync = false;
+        self.inner.ui.cmd_set_language = None;
 
         let sync_before = self.inner.ui.sync_enabled;
         self.inner.update(ctx, frame);
@@ -1634,6 +1727,15 @@ impl eframe::App for AppShell {
         // Keep tray checkbox aligned with UI toggle.
         if self.inner.ui.sync_enabled != sync_before {
             if let Some(tray) = &self.tray {
+                tray.set_sync_checked(self.inner.ui.sync_enabled);
+            }
+        }
+
+        if let Some(code) = self.inner.ui.cmd_set_language.take() {
+            // UI already called set_language for immediate hot-reload; persist + toast.
+            let _ = self.cmd_tx.send(UiCommand::SetLanguage(code));
+            if let Some(tray) = &self.tray {
+                tray.refresh_i18n_labels();
                 tray.set_sync_checked(self.inner.ui.sync_enabled);
             }
         }
@@ -1664,11 +1766,11 @@ impl eframe::App for AppShell {
         if self.inner.ui.cmd_open_config_folder {
             match Config::open_config_folder() {
                 Ok(()) => {
-                    self.inner.ui.toast = Some("已打开数据文件夹".into());
+                    self.inner.ui.toast = Some(ohmycopy::i18n::t("toast.data_folder_opened"));
                     self.inner.ui.toast_ttl_frames = TOAST_FRAMES;
                 }
                 Err(e) => {
-                    self.inner.ui.toast = Some(format!("无法打开数据文件夹：{e}"));
+                    self.inner.ui.toast = Some(ohmycopy::i18n::t_args("toast.data_folder_fail", &[("error", &e.to_string())]));
                     self.inner.ui.toast_ttl_frames = TOAST_FRAMES;
                 }
             }
@@ -1678,7 +1780,7 @@ impl eframe::App for AppShell {
                 let _ = self.cmd_tx.send(UiCommand::AddManual(addr));
             } else {
                 self.inner.ui.toast =
-                    Some("地址格式不对，请填写如 192.168.1.10:3721".into());
+                    Some(ohmycopy::i18n::t("toast.bad_manual_addr"));
                 self.inner.ui.toast_ttl_frames = TOAST_FRAMES;
             }
         }
@@ -1692,7 +1794,7 @@ impl eframe::App for AppShell {
                     });
                 }
                 _ => {
-                    self.inner.ui.toast = Some("设备地址无效，请重试".into());
+                    self.inner.ui.toast = Some(ohmycopy::i18n::t("toast.bad_device_addr"));
                     self.inner.ui.toast_ttl_frames = TOAST_FRAMES;
                 }
             }
@@ -1701,7 +1803,7 @@ impl eframe::App for AppShell {
             if let Ok(addr) = addr_str.parse::<SocketAddr>() {
                 let _ = self.cmd_tx.send(UiCommand::RemoveClient { device_id, addr });
             } else {
-                self.inner.ui.toast = Some("设备地址无效".into());
+                self.inner.ui.toast = Some(ohmycopy::i18n::t("toast.bad_device_addr_short"));
                 self.inner.ui.toast_ttl_frames = TOAST_FRAMES;
             }
         }

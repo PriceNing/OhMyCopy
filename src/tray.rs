@@ -55,19 +55,25 @@ impl AppTray {
             on_sync: Mutex::new(None),
         });
 
-        let item_show = MenuItem::with_id("ohmycopy.tray.show", "显示主窗口", true, None);
+        let item_show = MenuItem::with_id(
+            "ohmycopy.tray.show",
+            crate::i18n::t("tray.show"),
+            true,
+            None,
+        );
         let item_sync = CheckMenuItem::with_id(
             "ohmycopy.tray.sync",
             if sync_enabled {
-                "同步：开"
+                crate::i18n::t("app.sync_on")
             } else {
-                "同步：关"
+                crate::i18n::t("app.sync_off")
             },
             true,
             sync_enabled,
             None,
         );
-        let item_quit = MenuItem::with_id("ohmycopy.tray.quit", "退出", true, None);
+        let item_quit =
+            MenuItem::with_id("ohmycopy.tray.quit", crate::i18n::t("tray.quit"), true, None);
 
         let menu = Menu::new();
         menu.append(&item_show).context("tray menu append show")?;
@@ -85,7 +91,7 @@ impl AppTray {
         // Right-click = menu; left-click = app event (show window). Default is left=menu.
         let tray = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
-            .with_tooltip("OhMyCopy — 局域网剪贴板同步")
+            .with_tooltip(crate::i18n::t("tray.tooltip"))
             .with_icon(icon)
             .with_menu_on_left_click(false)
             .build()
@@ -189,10 +195,23 @@ impl AppTray {
         self.shared.sync_enabled.store(enabled, Ordering::SeqCst);
         self.item_sync.set_checked(enabled);
         self.item_sync.set_text(if enabled {
-            "同步：开"
+            crate::i18n::t("app.sync_on")
         } else {
-            "同步：关"
+            crate::i18n::t("app.sync_off")
         });
+    }
+
+    /// Refresh menu labels after a language hot-reload.
+    pub fn refresh_i18n_labels(&self) {
+        self._item_show.set_text(crate::i18n::t("tray.show"));
+        self._item_quit.set_text(crate::i18n::t("tray.quit"));
+        let enabled = self.shared.sync_enabled.load(Ordering::SeqCst);
+        self.item_sync.set_text(if enabled {
+            crate::i18n::t("app.sync_on")
+        } else {
+            crate::i18n::t("app.sync_off")
+        });
+        // Tooltip: tray-icon may not expose set_tooltip on all versions — best-effort.
     }
 
     pub fn sync_enabled(&self) -> bool {

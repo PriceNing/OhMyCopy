@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.36 — 2026-07-18
+
+### 功能
+
+- 内置多语言（`en_us` / `zh_cn`）：源文件在 `languages/*.lang`，编译期 `include_str!` 嵌入，单 exe 无需外置语言包
+- 设置页语言下拉热切换，立即写入 `config.language`；启动顺序：配置 → 系统 locale → English
+- 缺 key 回退 English；GUI / headless / 托盘 / 状态与 toast 共用同一 i18n 路径
+
+### 修复 / 统一
+
+- headless 工作目录文案与 GUI 一致（`~/.ohmycopy`）；共享 `run_with_config` 同步管线不变
+
 ## 0.1.35 — 2026-07-18
 
 ### 安全与稳健

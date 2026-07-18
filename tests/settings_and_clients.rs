@@ -77,13 +77,24 @@ fn history_preview_never_contains_windows_path() {
         .unwrap();
     let items = store.list("", 10).unwrap();
     assert_eq!(items.len(), 1);
-    assert!(items[0].preview.starts_with("[图片]"));
+    let img_tag = ohmycopy::i18n::t("history.tag_image");
+    assert!(
+        items[0].preview.starts_with(&img_tag)
+            || items[0].preview.starts_with("[Image]")
+            || items[0].preview.starts_with("[图片]"),
+        "preview={}",
+        items[0].preview
+    );
     assert!(
         !items[0].preview.contains(r"C:\"),
         "preview leaked path: {}",
         items[0].preview
     );
-    assert!(items[0].preview.contains("orca-paste-xxx.png") || items[0].preview.contains("图片"));
+    assert!(
+        items[0].preview.contains("orca-paste-xxx.png")
+            || items[0].preview.contains("图片")
+            || items[0].preview.contains("Image")
+    );
     // content keeps path for re-copy
     assert!(items[0].content.contains("orca-paste") || items[0].content == path);
 }
@@ -105,7 +116,14 @@ fn history_file_preview_short_name() {
         )
         .unwrap();
     let items = store.list("", 5).unwrap();
-    assert!(items[0].preview.starts_with("[文件]"));
+    let file_tag = ohmycopy::i18n::t("history.tag_file");
+    assert!(
+        items[0].preview.starts_with(&file_tag)
+            || items[0].preview.starts_with("[File]")
+            || items[0].preview.starts_with("[文件]"),
+        "preview={}",
+        items[0].preview
+    );
     assert!(items[0].preview.contains("report.pdf"));
     assert!(!items[0].preview.contains(r"C:\Users"));
 }

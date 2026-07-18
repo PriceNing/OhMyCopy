@@ -548,6 +548,11 @@ async fn hub_auth_fail_wrong_password() {
                         || s.contains("鉴权")
                         || s.contains("失败")
                         || s.contains("连接")
+                        || s.to_ascii_lowercase().contains("password")
+                        || s.to_ascii_lowercase().contains("auth")
+                        || s.to_ascii_lowercase().contains("mismatch")
+                        || s.to_ascii_lowercase().contains("fail")
+                        || s.to_ascii_lowercase().contains("connect")
             )
     })
     .await;

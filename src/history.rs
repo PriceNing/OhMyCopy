@@ -82,13 +82,19 @@ impl HistoryStore {
     ) -> Result<()> {
         let name = short_display_name(file_name);
         let is_folder = name.starts_with("文件夹")
+            || name.starts_with("Folder ")
             || Path::new(local_path).is_dir()
             || file_name.contains('📁');
         let name = name
             .strip_prefix("文件夹 ")
+            .or_else(|| name.strip_prefix("Folder "))
             .unwrap_or(&name)
             .to_string();
-        let tag = if is_folder { "[文件夹]" } else { "[文件]" };
+        let tag = if is_folder {
+            crate::i18n::t("history.tag_folder")
+        } else {
+            crate::i18n::t("history.tag_file")
+        };
         let preview = make_preview(&format!("{tag} {name} ({})", format_size(size)), 56);
         self.conn.execute(
             "INSERT OR REPLACE INTO history(event_id, source_id, kind, mime, preview, content, created_at)
@@ -116,7 +122,8 @@ impl HistoryStore {
         created_at: u64,
     ) -> Result<()> {
         let name = short_display_name(label);
-        let preview = make_preview(&format!("[图片] {name} ({})", format_size(size)), 56);
+        let tag = crate::i18n::t("history.tag_image");
+        let preview = make_preview(&format!("{tag} {name} ({})", format_size(size)), 56);
         self.conn.execute(
             "INSERT OR REPLACE INTO history(event_id, source_id, kind, mime, preview, content, created_at)
              VALUES (?1, ?2, 'image', 'image/png', ?3, ?4, ?5)",
@@ -200,7 +207,20 @@ fn format_size(n: u64) -> String {
 fn short_display_name(raw: &str) -> String {
     let mut s = raw.trim().to_string();
     // Drop common prefixes callers may have added.
-    for p in ["📄 ", "🖼️ ", "📁 ", "[图片] ", "[文件] ", "[文件夹] ", "📄", "🖼️", "📁"] {
+    for p in [
+        "📄 ",
+        "🖼️ ",
+        "📁 ",
+        "[图片] ",
+        "[文件] ",
+        "[文件夹] ",
+        "[Image] ",
+        "[File] ",
+        "[Folder] ",
+        "📄",
+        "🖼️",
+        "📁",
+    ] {
         if let Some(rest) = s.strip_prefix(p) {
             s = rest.trim().to_string();
         }
@@ -215,7 +235,7 @@ fn short_display_name(raw: &str) -> String {
     // Collapse whitespace
     let s: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
     if s.is_empty() {
-        "未命名".into()
+        crate::i18n::t("history.unnamed")
     } else {
         s
     }

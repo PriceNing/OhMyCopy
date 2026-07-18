@@ -37,6 +37,10 @@ pub struct UiState {
     pub start_minimized_to_tray: bool,
     /// Launch at user login. Persisted as config.auto_start + OS startup entry.
     pub auto_start: bool,
+    /// Active UI language code (`en_us` / `zh_cn`). Hot-reloaded; persisted immediately.
+    pub language: String,
+    /// Set when user changes language combo — runtime persists config.language at once.
+    pub cmd_set_language: Option<String>,
     pub manual_addr: String,
     pub search: String,
     pub status_line: String,
@@ -81,9 +85,11 @@ impl Default for UiState {
             sync_enabled: true,
             start_minimized_to_tray: false,
             auto_start: false,
+            language: crate::i18n::LANG_EN.to_string(),
+            cmd_set_language: None,
             manual_addr: String::new(),
             search: String::new(),
-            status_line: "启动中…".into(),
+            status_line: crate::i18n::t("app.starting"),
             firewall_hint: None,
             peers: Vec::new(),
             nearby: Vec::new(),
@@ -147,15 +153,15 @@ impl eframe::App for OhMyCopyApp {
             ui.horizontal(|ui| {
                 ui.heading(egui::RichText::new("OhMyCopy").color(t.accent).strong());
                 ui.label(
-                    egui::RichText::new("局域网剪贴板同步")
+                    egui::RichText::new(crate::i18n::t("app.subtitle"))
                         .color(t.text_muted)
                         .small(),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let sync_label = if self.ui.sync_enabled {
-                        "同步：开"
+                        crate::i18n::t("app.sync_on")
                     } else {
-                        "同步：关"
+                        crate::i18n::t("app.sync_off")
                     };
                     if ui
                         .add(egui::Button::new(sync_label).fill(t.card))
@@ -168,9 +174,9 @@ impl eframe::App for OhMyCopyApp {
             });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                tab_btn(ui, &mut self.ui.tab, Tab::History, "历史", &t);
-                tab_btn(ui, &mut self.ui.tab, Tab::Devices, "设备", &t);
-                tab_btn(ui, &mut self.ui.tab, Tab::Settings, "设置", &t);
+                tab_btn(ui, &mut self.ui.tab, Tab::History, crate::i18n::t("tab.history"), &t);
+                tab_btn(ui, &mut self.ui.tab, Tab::Devices, crate::i18n::t("tab.devices"), &t);
+                tab_btn(ui, &mut self.ui.tab, Tab::Settings, crate::i18n::t("tab.settings"), &t);
             });
             ui.add_space(4.0);
         });
@@ -222,7 +228,8 @@ impl eframe::App for OhMyCopyApp {
     }
 }
 
-fn tab_btn(ui: &mut egui::Ui, current: &mut Tab, tab: Tab, label: &str, t: &GlassTheme) {
+fn tab_btn(ui: &mut egui::Ui, current: &mut Tab, tab: Tab, label: impl Into<String>, t: &GlassTheme) {
+    let label = label.into();
     let selected = *current == tab;
     let fill = if selected {
         t.accent.gamma_multiply(0.35)
@@ -353,7 +360,7 @@ fn history_row(
         });
     });
 
-    if ui.put(btn_rect, egui::Button::new("复制").fill(t.accent.gamma_multiply(0.35)))
+    if ui.put(btn_rect, egui::Button::new(crate::i18n::t("history.copy")).fill(t.accent.gamma_multiply(0.35)))
         .clicked()
     {
         clicked = true;
@@ -364,13 +371,13 @@ fn history_row(
 fn draw_history(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
     glass_panel(ui, t, |ui| {
         ui.horizontal(|ui| {
-            ui.label("搜索");
+            ui.label(crate::i18n::t("history.search"));
             ui.add(
                 egui::TextEdit::singleline(&mut state.search)
                     .desired_width(200.0)
-                    .hint_text("过滤历史…"),
+                    .hint_text(crate::i18n::t("history.filter_hint")),
             );
-            if ui.button("清空历史").clicked() {
+            if ui.button(crate::i18n::t("history.clear")).clicked() {
                 state.cmd_clear_history = true;
             }
         });
@@ -389,7 +396,7 @@ fn draw_history(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                 if state.history.is_empty() {
                     ui.label(
                         egui::RichText::new(
-                            "暂无历史。复制文本、图片/截图或文件后将出现在这里。",
+                            crate::i18n::t("history.empty"),
                         )
                         .color(t.text_muted),
                     );
@@ -425,17 +432,17 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
     glass_panel(ui, t, |ui| {
         ui.horizontal(|ui| {
             ui.label(
-                egui::RichText::new("我的设备")
+                egui::RichText::new(crate::i18n::t("devices.mine"))
                     .strong()
                     .color(t.text),
             );
-            if ui.button("刷新列表").clicked() {
+            if ui.button(crate::i18n::t("devices.refresh")).clicked() {
                 state.cmd_reload_clients = true;
             }
         });
         ui.label(
             egui::RichText::new(
-                "连接成功后会显示在这里，并自动保持连接。「忽略」= 暂时不同步；「移除」= 断开并不再自动连接。",
+                crate::i18n::t("devices.mine_help"),
             )
             .small()
             .color(t.text_muted),
@@ -452,7 +459,7 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                 if state.saved_clients.is_empty() {
                     ui.label(
                         egui::RichText::new(
-                            "还没有设备。请在下方「附近设备」点连接，或手动填写对方电脑地址。",
+                            crate::i18n::t("devices.none"),
                         )
                         .color(t.text_muted),
                     );
@@ -465,11 +472,11 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                     let connected = already.map(|p| p.connected).unwrap_or(false);
                     let connecting = already.map(|p| p.connecting).unwrap_or(false);
                     let status = if c.ignored {
-                        "已暂停同步"
+                        crate::i18n::t("devices.paused")
                     } else {
                         already
-                            .map(|p| p.status.as_str())
-                            .unwrap_or("等待连接…")
+                            .map(|p| p.status.clone())
+                            .unwrap_or_else(|| crate::i18n::t("devices.waiting"))
                     };
 
                     ui.horizontal(|ui| {
@@ -484,17 +491,17 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui
                                 .add(
-                                    egui::Button::new("移除")
+                                    egui::Button::new(crate::i18n::t("devices.remove"))
                                         .fill(egui::Color32::from_rgb(90, 40, 40)),
                                 )
-                                .on_hover_text("断开并移除这台设备")
+                                .on_hover_text(crate::i18n::t("devices.remove_hint"))
                                 .clicked()
                             {
                                 open_remove_confirm =
                                     Some((c.device_id, c.addr.clone(), c.name.clone()));
                             }
                             // Simple toggle: text only changes; slight accent when on.
-                            let ign_label = if c.ignored { "恢复同步" } else { "暂停同步" };
+                            let ign_label = if c.ignored { crate::i18n::t("devices.resume_sync") } else { crate::i18n::t("devices.pause_sync") };
                             let ign_btn = if c.ignored {
                                 egui::Button::new(
                                     egui::RichText::new(ign_label).color(t.warning),
@@ -509,9 +516,9 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                             if ui
                                 .add(ign_btn)
                                 .on_hover_text(if c.ignored {
-                                    "重新与这台设备同步剪贴板"
+                                    crate::i18n::t("devices.resume_hint")
                                 } else {
-                                    "暂时不同步，连接仍可保留"
+                                    crate::i18n::t("devices.pause_hint")
                                 })
                                 .clicked()
                             {
@@ -521,14 +528,14 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                                     Some((c.device_id, c.addr.clone(), new_val));
                             }
                             if connected {
-                                ui.label(egui::RichText::new("已连接").color(t.accent).small());
+                                ui.label(egui::RichText::new(crate::i18n::t("devices.connected")).color(t.accent).small());
                             } else if connecting {
                                 ui.label(
-                                    egui::RichText::new("连接中…").color(t.warning).small(),
+                                    egui::RichText::new(crate::i18n::t("devices.connecting")).color(t.warning).small(),
                                 );
                             } else {
                                 ui.label(
-                                    egui::RichText::new("自动重连中")
+                                    egui::RichText::new(crate::i18n::t("devices.auto_reconnect"))
                                         .color(t.text_muted)
                                         .small(),
                                 );
@@ -550,21 +557,22 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
         if let Some((id, addr, name)) = state.confirm_remove.clone() {
             let mut close = false;
             let mut confirmed = false;
-            egui::Window::new("确认移除")
+            egui::Window::new(crate::i18n::t("devices.confirm_remove_title"))
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ui.ctx(), |ui| {
                     ui.set_min_width(320.0);
                     ui.label(
-                        egui::RichText::new(format!("确定移除「{name}」吗？"))
+                        egui::RichText::new(crate::i18n::t_args("devices.confirm_remove_body", &[("name", &name)]))
                             .strong()
                             .color(t.text),
                     );
                     ui.add_space(4.0);
                     ui.label(
-                        egui::RichText::new(format!(
-                            "地址：{addr}\n移除后将断开，并不再自动连接这台设备。"
+                        egui::RichText::new(crate::i18n::t_args(
+                            "devices.confirm_remove_detail",
+                            &[("addr", &addr)],
                         ))
                         .small()
                         .color(t.text_muted),
@@ -573,7 +581,7 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                     ui.horizontal(|ui| {
                         if ui
                             .add(
-                                egui::Button::new("取消")
+                                egui::Button::new(crate::i18n::t("devices.cancel"))
                                     .min_size(egui::vec2(80.0, 28.0)),
                             )
                             .clicked()
@@ -583,7 +591,7 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                         ui.add_space(8.0);
                         if ui
                             .add(
-                                egui::Button::new("确认移除")
+                                egui::Button::new(crate::i18n::t("devices.confirm_remove_btn"))
                                     .fill(egui::Color32::from_rgb(140, 40, 40))
                                     .min_size(egui::vec2(100.0, 28.0)),
                             )
@@ -604,13 +612,13 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
 
         ui.add_space(12.0);
         ui.label(
-            egui::RichText::new("附近设备")
+            egui::RichText::new(crate::i18n::t("devices.nearby"))
                 .strong()
                 .color(t.text),
         );
         ui.label(
             egui::RichText::new(
-                "自动搜索同一网络中的 OhMyCopy。点「连接」并输入相同密码后即可同步。",
+                crate::i18n::t("devices.nearby_help"),
             )
             .small()
             .color(t.text_muted),
@@ -623,7 +631,7 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
         if state.nearby.is_empty() {
             ui.label(
                 egui::RichText::new(
-                    "暂时没有发现其他设备。请确认双方都已打开软件，并在同一网络（必要时检查防火墙是否拦截本软件）。",
+                    crate::i18n::t("devices.nearby_none"),
                 )
                 .color(t.text_muted)
                 .small(),
@@ -639,7 +647,9 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                         });
                         let connecting = already.map(|p| p.connecting).unwrap_or(false);
                         let auth_failed = already
-                            .map(|p| p.status.contains("鉴权") || p.status.contains("密码"))
+                            .map(|p| {
+                                p.status_kind == crate::net::peer::PeerStatus::AuthFailed
+                            })
                             .unwrap_or(false);
 
                         ui.horizontal(|ui| {
@@ -660,13 +670,13 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                                 |ui| {
                                     if connecting {
                                         ui.label(
-                                            egui::RichText::new("连接中…")
+                                            egui::RichText::new(crate::i18n::t("devices.connecting"))
                                                 .color(t.warning)
                                                 .small(),
                                         );
                                     } else if ui
                                         .add(
-                                            egui::Button::new("连接")
+                                            egui::Button::new(crate::i18n::t("devices.connect"))
                                                 .fill(t.accent.gamma_multiply(0.45)),
                                         )
                                         .clicked()
@@ -679,7 +689,7 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                                     }
                                     if auth_failed {
                                         ui.label(
-                                            egui::RichText::new("密码错误")
+                                            egui::RichText::new(crate::i18n::t("devices.bad_password"))
                                                 .color(t.warning)
                                                 .small(),
                                         );
@@ -697,15 +707,15 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
         }
 
         ui.add_space(12.0);
-        ui.label(egui::RichText::new("手动添加").strong().color(t.text));
+        ui.label(egui::RichText::new(crate::i18n::t("devices.manual")).strong().color(t.text));
         ui.horizontal(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut state.manual_addr)
                     .desired_width(200.0)
-                    .hint_text("例如 192.168.1.10:3721"),
+                    .hint_text(crate::i18n::t("devices.manual_hint")),
             );
             if ui
-                .add(egui::Button::new("连接").fill(t.accent.gamma_multiply(0.45)))
+                .add(egui::Button::new(crate::i18n::t("devices.connect")).fill(t.accent.gamma_multiply(0.45)))
                 .clicked()
             {
                 state.cmd_add_manual = true;
@@ -713,7 +723,7 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
         });
         ui.label(
             egui::RichText::new(
-                "填写对方电脑的 IP 和端口（默认 3721）。密码正确后会加入「我的设备」并自动保持连接。",
+                crate::i18n::t("devices.manual_help"),
             )
             .small()
             .color(t.text_muted),
@@ -744,7 +754,7 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                 // Stretch content column like history/devices cards.
                 let col_w = ui.available_width().min(520.0);
 
-                ui.label(egui::RichText::new("基本设置").strong().color(t.text));
+                ui.label(egui::RichText::new(crate::i18n::t("settings.basic")).strong().color(t.text));
                 ui.add_space(8.0);
 
                 egui::Grid::new("settings")
@@ -754,14 +764,42 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                     .show(ui, |ui| {
                         let field_w = (col_w - 130.0).clamp(180.0, 360.0);
 
-                        ui.label(egui::RichText::new("设备名称").color(t.text));
+                        // Language: hot-reload + immediate config write (not behind Save).
+                        ui.label(
+                            egui::RichText::new(crate::i18n::t("settings.language")).color(t.text),
+                        );
+                        let langs = crate::i18n::available_languages();
+                        let current_label = langs
+                            .iter()
+                            .find(|(c, _)| c == &state.language)
+                            .map(|(_, n)| n.clone())
+                            .unwrap_or_else(|| state.language.clone());
+                        egui::ComboBox::from_id_salt("settings_language")
+                            .width(field_w)
+                            .selected_text(current_label)
+                            .show_ui(ui, |ui| {
+                                for (code, name) in &langs {
+                                    if ui
+                                        .selectable_label(state.language == *code, name)
+                                        .clicked()
+                                        && state.language != *code
+                                    {
+                                        state.language = code.clone();
+                                        let _ = crate::i18n::set_language(code);
+                                        state.cmd_set_language = Some(code.clone());
+                                    }
+                                }
+                            });
+                        ui.end_row();
+
+                        ui.label(egui::RichText::new(crate::i18n::t("settings.device_name")).color(t.text));
                         ui.add(
                             egui::TextEdit::singleline(&mut state.device_name)
                                 .desired_width(field_w),
                         );
                         ui.end_row();
 
-                        ui.label(egui::RichText::new("共享密码").color(t.text));
+                        ui.label(egui::RichText::new(crate::i18n::t("settings.password")).color(t.text));
                         ui.horizontal(|ui| {
                             let eye_w = 40.0;
                             let edit_w = (field_w - eye_w - 6.0).max(120.0);
@@ -772,9 +810,9 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                             );
                             // Toggle visibility (text works reliably with CJK system fonts)
                             let eye_label = if state.show_password {
-                                "隐藏"
+                                crate::i18n::t("settings.hide")
                             } else {
-                                "显示"
+                                crate::i18n::t("settings.show")
                             };
                             if ui
                                 .add_sized(
@@ -787,9 +825,9 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                                     .fill(t.card),
                                 )
                                 .on_hover_text(if state.show_password {
-                                    "隐藏密码"
+                                    crate::i18n::t("settings.hide_password")
                                 } else {
-                                    "显示密码"
+                                    crate::i18n::t("settings.show_password")
                                 })
                                 .clicked()
                             {
@@ -798,31 +836,36 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                         });
                         ui.end_row();
 
-                        ui.label(egui::RichText::new("连接端口").color(t.text));
+                        ui.label(egui::RichText::new(crate::i18n::t("settings.tcp_port")).color(t.text));
                         ui.add(
                             egui::TextEdit::singleline(&mut state.tcp_port).desired_width(field_w),
                         );
                         ui.end_row();
 
-                        ui.label(egui::RichText::new("发现端口").color(t.text));
+                        ui.label(egui::RichText::new(crate::i18n::t("settings.udp_port")).color(t.text));
                         ui.add(
                             egui::TextEdit::singleline(&mut state.udp_port).desired_width(field_w),
                         );
                         ui.end_row();
 
-                        ui.label(egui::RichText::new("单次同步上限").color(t.text));
+                        ui.label(egui::RichText::new(crate::i18n::t("settings.max_payload")).color(t.text));
                         ui.horizontal(|ui| {
                             ui.add(
                                 egui::TextEdit::singleline(&mut state.max_payload_mb)
                                     .desired_width((field_w - 40.0).max(80.0)),
                             );
-                            ui.label(egui::RichText::new("MB").color(t.text_muted));
+                            ui.label(egui::RichText::new(crate::i18n::t("settings.mb")).color(t.text_muted));
                         });
                         ui.end_row();
                     });
                 ui.label(
+                    egui::RichText::new(crate::i18n::t("settings.language_help"))
+                        .small()
+                        .color(t.text_muted),
+                );
+                ui.label(
                     egui::RichText::new(
-                        "限制本机发送和接收的单条内容大小（文字、图片、文件、文件夹）。发与收都按本机设置判断；两端不一致时，以较小的一方为准。传大文件请把两端都调大（例如 100）。",
+                        crate::i18n::t("settings.max_payload_help"),
                     )
                     .small()
                     .color(t.text_muted),
@@ -832,17 +875,17 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                     ui.add_space(10.0);
                     ui.colored_label(
                         egui::Color32::from_rgb(220, 80, 80),
-                        "⚠ 请先设置自己的共享密码。密码为空或不安全时，无法与其他电脑配对和同步。",
+                        crate::i18n::t("settings.insecure_password"),
                     );
                 }
 
                 ui.add_space(12.0);
                 ui.checkbox(
                     &mut state.auto_start,
-                    egui::RichText::new("开机或登录后自动启动").color(t.text),
+                    egui::RichText::new(crate::i18n::t("settings.auto_start")).color(t.text),
                 );
                 ui.label(
-                    egui::RichText::new("勾选并保存后，下次登录电脑会自动打开 OhMyCopy。")
+                    egui::RichText::new(crate::i18n::t("settings.auto_start_help"))
                         .small()
                         .color(t.text_muted),
                 );
@@ -850,11 +893,11 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                 ui.add_space(8.0);
                 ui.checkbox(
                     &mut state.start_minimized_to_tray,
-                    egui::RichText::new("启动时最小化到托盘").color(t.text),
+                    egui::RichText::new(crate::i18n::t("settings.start_tray")).color(t.text),
                 );
                 ui.label(
                     egui::RichText::new(
-                        "开启后启动时只在右下角托盘显示图标，不弹出主窗口（点击托盘可打开）。",
+                        crate::i18n::t("settings.start_tray_help"),
                     )
                     .small()
                     .color(t.text_muted),
@@ -864,7 +907,7 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                 ui.horizontal(|ui| {
                     if ui
                         .add(
-                            egui::Button::new("保存设置")
+                            egui::Button::new(crate::i18n::t("settings.save"))
                                 .fill(t.accent.gamma_multiply(0.5))
                                 .min_size(egui::vec2(120.0, 32.0)),
                         )
@@ -874,11 +917,11 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                     }
                     if ui
                         .add(
-                            egui::Button::new("打开数据文件夹")
+                            egui::Button::new(crate::i18n::t("settings.open_data"))
                                 .fill(t.card)
                                 .min_size(egui::vec2(140.0, 32.0)),
                         )
-                        .on_hover_text("打开本软件的设置与接收文件存放位置")
+                        .on_hover_text(crate::i18n::t("settings.open_data_hint"))
                         .clicked()
                     {
                         state.cmd_open_config_folder = true;
@@ -890,15 +933,15 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                 ui.add_space(8.0);
                 ui.label(
                     egui::RichText::new(
-                        "提示：修改密码后新连接会立即使用新密码；修改端口后需要重启本软件才会生效。",
+                        crate::i18n::t("settings.port_password_hint"),
                     )
                     .small()
                     .color(t.warning),
                 );
                 ui.add_space(4.0);
                 let cfg_hint = crate::config::Config::config_dir()
-                    .map(|p| format!("文件保存在：{}", p.display()))
-                    .unwrap_or_else(|_| "文件保存在用户目录下的 .ohmycopy 文件夹".into());
+                    .map(|p| crate::i18n::t_args("settings.data_path", &[("path", &p.display().to_string())]))
+                    .unwrap_or_else(|_| crate::i18n::t("settings.data_path_fallback"));
                 ui.label(
                     egui::RichText::new(cfg_hint)
                         .small()

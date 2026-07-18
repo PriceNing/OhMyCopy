@@ -158,7 +158,7 @@ impl NetworkHub {
     fn refuse_if_insecure(&self) -> Result<()> {
         if self.has_insecure_default_password() {
             let _ = self.events.send(NetEvent::Toast(
-                "请先在设置里填写自己的共享密码，然后才能连接其他电脑。".into(),
+                crate::i18n::t("status.need_password"),
             ));
             bail!("insecure default password");
         }
@@ -199,11 +199,11 @@ impl NetworkHub {
         let n = self.connected_count();
         let connecting = self.connecting.lock().len() + self.connecting_addrs.lock().len();
         if n > 0 {
-            format!("已连接 {n} 台设备")
+            crate::i18n::t_args("status.connected_n", &[("n", &n.to_string())])
         } else if connecting > 0 {
-            "正在连接…".into()
+            crate::i18n::t("status.connecting")
         } else {
-            "已就绪，等待连接".into()
+            crate::i18n::t("status.ready")
         }
     }
 
@@ -265,7 +265,7 @@ impl NetworkHub {
             return;
         }
         self.known.lock().insert(device_id, addr);
-        let _ = self.events.send(NetEvent::Toast(format!("正在连接 {addr} …")));
+        let _ = self.events.send(NetEvent::Toast(crate::i18n::t_args("status.connecting_addr", &[("addr", &addr.to_string())])));
         let hub = Arc::clone(self);
         self.spawn(async move {
             hub.force_dial(device_id, addr).await;
@@ -279,7 +279,7 @@ impl NetworkHub {
         }
         let _ = self
             .events
-            .send(NetEvent::Toast(format!("正在连接 {addr} …")));
+            .send(NetEvent::Toast(crate::i18n::t_args("status.connecting_addr", &[("addr", &addr.to_string())])));
         let hub = Arc::clone(self);
         self.spawn(async move {
             hub.dial_addr(addr).await;
@@ -369,7 +369,7 @@ impl NetworkHub {
                     id.to_string(),
                     addr,
                     PeerStatus::Disconnected,
-                    Some("已解除配对".into()),
+                    Some(crate::i18n::t("status.unpaired")),
                 )
                 .await;
             } else {
@@ -391,7 +391,7 @@ impl NetworkHub {
                         id.to_string(),
                         addr,
                         PeerStatus::Disconnected,
-                        Some("已解除配对".into()),
+                        Some(crate::i18n::t("status.unpaired")),
                     )
                     .await;
                 }
@@ -458,7 +458,7 @@ impl NetworkHub {
                 tracing::error!(error = %e, "encode clipboard event");
                 tracing::error!(error = %e, "encode clipboard event");
                 let _ = self.events.send(NetEvent::Toast(
-                    "同步失败，内容无法发送。".into(),
+                    crate::i18n::t("status.sync_failed"),
                 ));
                 return;
             }
@@ -467,7 +467,7 @@ impl NetworkHub {
         if body_len > MAX_FRAME_BYTES {
             tracing::error!(body_len, max = MAX_FRAME_BYTES, "clipboard event exceeds frame cap");
             let _ = self.events.send(NetEvent::Toast(
-                "内容过大，无法同步。请在设置中提高「单次同步上限」，或拆分文件。".into(),
+                crate::i18n::t("status.oversize"),
             ));
             return;
         }
@@ -516,7 +516,7 @@ impl NetworkHub {
         } else if failed > 0 || except_peer.is_none() {
             tracing::warn!(failed, body_len, "clipboard event not delivered to any peer");
             let _ = self.events.send(NetEvent::Toast(
-                "当前没有已连接的设备，内容未同步出去。".into(),
+                crate::i18n::t("status.no_peers"),
             ));
         }
     }
@@ -525,14 +525,14 @@ impl NetworkHub {
         let listener = match TcpListener::bind(listen_addr).await {
             Ok(l) => {
                 tracing::info!(%listen_addr, "TCP listening");
-                let _ = self.events.send(NetEvent::Status("已就绪，等待连接".into()));
+                let _ = self.events.send(NetEvent::Status(crate::i18n::t("status.ready")));
                 l
             }
             Err(e) => {
                 tracing::error!(error = %e, "TCP bind failed");
-                let _ = self.events.send(NetEvent::FirewallHint(format!(
-                    "无法使用端口 {}（可能被占用或被防火墙拦截）。请换一个端口，或在系统防火墙中允许 OhMyCopy。",
-                    listen_addr.port()
+                let _ = self.events.send(NetEvent::FirewallHint(crate::i18n::t_args(
+                    "status.firewall",
+                    &[("port", &listen_addr.port().to_string())],
                 )));
                 let _ = shutdown.recv().await;
                 return;
@@ -676,8 +676,9 @@ impl NetworkHub {
             let msg = e.to_string();
             // Auth failures already emitted PeerAuthFailed + toast via that path.
             if !msg.contains("auth") {
-                let _ = self.events.send(NetEvent::Toast(format!(
-                    "无法连接 {addr}，请确认对方已打开软件且网络畅通"
+                let _ = self.events.send(NetEvent::Toast(crate::i18n::t_args(
+                    "status.connect_fail",
+                    &[("addr", &addr.to_string())],
                 )));
             }
             let _ = self
@@ -738,7 +739,7 @@ impl NetworkHub {
                     remote_id.to_string(),
                     addr,
                     PeerStatus::Disconnected,
-                    Some("连接超时".into()),
+                    Some(crate::i18n::t("status.connect_timeout")),
                 )
                 .await;
                 bail!("connect timeout");
@@ -789,9 +790,14 @@ impl NetworkHub {
             Message::Hello(h) => {
                 if h.protocol_version != PROTOCOL_VERSION {
                     bail!(
-                        "协议版本不匹配（本机 v{} / 对端 v{}），请两端升级到同一版本",
-                        PROTOCOL_VERSION,
-                        h.protocol_version
+                        "{}",
+                        crate::i18n::t_args(
+                            "status.protocol_mismatch",
+                            &[
+                                ("local", &PROTOCOL_VERSION.to_string()),
+                                ("remote", &h.protocol_version.to_string()),
+                            ],
+                        )
                     );
                 }
                 (h.device_id, h.device_name, h.listen_port)
@@ -900,8 +906,9 @@ impl NetworkHub {
             addr: peer_listen_addr,
             we_dialed,
         });
-        let _ = self.events.send(NetEvent::Toast(format!(
-            "已与「{remote_name}」连接成功"
+        let _ = self.events.send(NetEvent::Toast(crate::i18n::t_args(
+            "status.session_ok",
+            &[("name", &remote_name)],
         )));
         let _ = self
             .events
@@ -1025,16 +1032,16 @@ impl NetworkHub {
             addr,
             PeerStatus::Disconnected,
             if unpair {
-                Some("对端已解除配对".into())
+                Some(crate::i18n::t("status.peer_unpaired"))
             } else {
                 read_result.as_ref().err().map(|e| e.to_string())
             },
         )
         .await;
         if !unpair {
-            let _ = self.events.send(NetEvent::Toast(format!(
-                "与 {} 的连接已断开",
-                remote_name
+            let _ = self.events.send(NetEvent::Toast(crate::i18n::t_args(
+                "status.disconnected_from",
+                &[("name", &remote_name)],
             )));
         }
         let _ = self
@@ -1075,8 +1082,13 @@ impl NetworkHub {
                 Message::AuthResponse(r) => {
                     check_auth_identity(&r, remote_id, remote_name)?;
                     if !auth.verify_proof(&server_nonce, &r.proof) {
-                        self.emit_auth_failed(remote_id, remote_name, addr, "密码不匹配")
-                            .await;
+                        self.emit_auth_failed(
+                            remote_id,
+                            remote_name,
+                            addr,
+                            &crate::i18n::t("status.auth_mismatch"),
+                        )
+                        .await;
                         bail!("auth failed");
                     }
                 }
@@ -1134,8 +1146,13 @@ impl NetworkHub {
                 Message::AuthResponse(r) => {
                     check_auth_identity(&r, remote_id, remote_name)?;
                     if !auth.verify_proof(&client_nonce, &r.proof) {
-                        self.emit_auth_failed(remote_id, remote_name, addr, "密码不匹配")
-                            .await;
+                        self.emit_auth_failed(
+                            remote_id,
+                            remote_name,
+                            addr,
+                            &crate::i18n::t("status.auth_mismatch"),
+                        )
+                        .await;
                         bail!("auth reverse failed");
                     }
                 }
@@ -1173,16 +1190,23 @@ impl NetworkHub {
 fn check_auth_identity(r: &AuthResponse, remote_id: Uuid, remote_name: &str) -> Result<()> {
     if r.device_id != remote_id {
         bail!(
-            "AuthResponse device_id 与 Hello 不一致（{} != {}）",
-            r.device_id,
-            remote_id
+            "{}",
+            crate::i18n::t_args(
+                "status.auth_device_id",
+                &[
+                    ("a", &r.device_id.to_string()),
+                    ("b", &remote_id.to_string()),
+                ],
+            )
         );
     }
     if r.device_name != remote_name {
         bail!(
-            "AuthResponse device_name 与 Hello 不一致（{:?} != {:?}）",
-            r.device_name,
-            remote_name
+            "{}",
+            crate::i18n::t_args(
+                "status.auth_device_name",
+                &[("a", &format!("{:?}", r.device_name)), ("b", &format!("{:?}", remote_name))],
+            )
         );
     }
     Ok(())

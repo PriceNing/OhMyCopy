@@ -39,6 +39,9 @@ pub struct Config {
     /// When true, start with only the tray icon (main window hidden).
     #[serde(default)]
     pub start_minimized_to_tray: bool,
+    /// UI language code (`en_us`, `zh_cn`). Empty = auto (system locale, else English).
+    #[serde(default)]
+    pub language: String,
     /// Legacy field (migrated into clients.json). Kept for import only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub manual_peers: Vec<String>,
@@ -62,6 +65,7 @@ impl Default for Config {
             sync_enabled: true,
             console: false,
             start_minimized_to_tray: false,
+            language: String::new(),
             manual_peers: Vec::new(),
         }
     }
@@ -286,7 +290,16 @@ impl Config {
         if self.theme.trim().is_empty() {
             self.theme = "dark_glass".into();
         }
+        // language: empty means auto-detect at startup; do not force a code here.
         // console / start_minimized_to_tray: bool defaults via serde — no extra check
+    }
+
+    /// Persist only the language field (hot-reload path; does not require Save settings).
+    pub fn save_language(language: &str) -> Result<()> {
+        let mut cfg = Self::load_or_create()?;
+        cfg.language = language.trim().to_string();
+        cfg.persist_complete()?;
+        Ok(())
     }
 
     /// Write full schema to disk (fills missing keys for existing installs).
@@ -512,5 +525,18 @@ mod tests {
         let cfg: Config = serde_json::from_str(json).unwrap();
         assert!(!cfg.start_minimized_to_tray);
         assert!(!cfg.console);
+        assert!(cfg.language.is_empty());
+    }
+
+    #[test]
+    fn language_field_roundtrip() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut cfg = Config::default();
+        cfg.language = "zh_cn".into();
+        cfg.password = "secret".into();
+        std::fs::write(&path, serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
+        let loaded = Config::load(&path).unwrap();
+        assert_eq!(loaded.language, "zh_cn");
     }
 }

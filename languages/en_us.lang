@@ -1,0 +1,202 @@
+# OhMyCopy English (built-in catalog source; embedded at compile time)
+# Format: key=value  |  # comments  |  {name} placeholders
+
+meta.native_name=English
+meta.code=en_us
+
+# App chrome
+app.subtitle=LAN clipboard sync
+app.sync_on=Sync: On
+app.sync_off=Sync: Off
+app.starting=Starting…
+app.local_device=This PC: {name}
+
+tab.history=History
+tab.devices=Devices
+tab.settings=Settings
+
+# History
+history.search=Search
+history.filter_hint=Filter history…
+history.clear=Clear history
+history.empty=No history yet. Copy text, images/screenshots, or files and they will show up here.
+history.copy=Copy
+
+# Devices
+devices.mine=My devices
+devices.refresh=Refresh list
+devices.mine_help=Devices appear here after a successful connection and stay connected. "Pause sync" = temporarily stop clipboard sync; "Remove" = disconnect and stop auto-connect.
+devices.none=No devices yet. Connect under "Nearby devices" below, or enter the other PC's address manually.
+devices.paused=Sync paused
+devices.waiting=Waiting to connect…
+devices.remove=Remove
+devices.remove_hint=Disconnect and remove this device
+devices.resume_sync=Resume sync
+devices.pause_sync=Pause sync
+devices.resume_hint=Resume clipboard sync with this device
+devices.pause_hint=Temporarily stop syncing; the connection can stay
+devices.connected=Connected
+devices.connecting=Connecting…
+devices.auto_reconnect=Auto-reconnecting
+devices.confirm_remove_title=Confirm remove
+devices.confirm_remove_body=Remove "{name}"?
+devices.confirm_remove_detail=Address: {addr}\nAfter removal this device will disconnect and will not auto-connect again.
+devices.cancel=Cancel
+devices.confirm_remove_btn=Remove
+devices.nearby=Nearby devices
+devices.nearby_help=Searches the same network for OhMyCopy. Click Connect and use the same password to sync.
+devices.nearby_none=No other devices found. Make sure both PCs are running OhMyCopy on the same network (check the firewall if needed).
+devices.connect=Connect
+devices.bad_password=Wrong password
+devices.manual=Add manually
+devices.manual_hint=e.g. 192.168.1.10:3721
+devices.manual_help=Enter the other PC's IP and port (default 3721). After a correct password it joins My devices and stays connected.
+
+# Settings
+settings.basic=Basic settings
+settings.device_name=Device name
+settings.password=Shared password
+settings.hide=Hide
+settings.show=Show
+settings.hide_password=Hide password
+settings.show_password=Show password
+settings.tcp_port=Connect port
+settings.udp_port=Discovery port
+settings.max_payload=Max size per sync
+settings.mb=MB
+settings.max_payload_help=Limits the size of a single item this PC sends or receives (text, image, file, folder). Both sides use their own limit; the smaller one wins. Raise both ends for large transfers (e.g. 100).
+settings.insecure_password=⚠ Set your own shared password first. Empty or insecure passwords cannot pair or sync with other PCs.
+settings.auto_start=Start when I sign in
+settings.auto_start_help=After you check this and save, OhMyCopy opens automatically at next sign-in.
+settings.start_tray=Start minimized to tray
+settings.start_tray_help=When on, only the tray icon shows at start (open the main window from the tray).
+settings.save=Save settings
+settings.open_data=Open data folder
+settings.open_data_hint=Open this app's settings and received-file folder
+settings.port_password_hint=Tip: new connections use a new password immediately; port changes need an app restart.
+settings.data_path=Files are stored in: {path}
+settings.data_path_fallback=Files are stored in the .ohmycopy folder under your user profile
+settings.language=Language
+settings.language_help=UI language. Changes apply immediately.
+
+# Peer status
+peer.discovered=Discovered
+peer.connecting=Connecting…
+peer.connected=Connected
+peer.auth_failed=Auth failed
+peer.disconnected=Disconnected
+
+# Tray
+tray.show=Show main window
+tray.quit=Quit
+tray.tooltip=OhMyCopy — LAN clipboard sync
+
+# Common status / hub
+status.ready=Ready, waiting for connections
+status.connecting=Connecting…
+status.connected_n=Connected to {n} device(s)
+status.need_password=Set your own shared password in Settings before connecting to other PCs.
+status.firewall=Cannot use port {port} (in use or blocked by firewall). Try another port, or allow OhMyCopy in the system firewall.
+status.no_peers=No connected devices; content was not synced out.
+status.sync_failed=Sync failed; content could not be sent.
+status.oversize=Content is too large to sync. Raise "Max size per sync" in Settings, or split the file.
+status.connecting_addr=Connecting to {addr} …
+status.unpaired=Unpaired
+status.peer_unpaired=Peer unpaired
+status.connect_timeout=Connection timed out
+status.connect_fail=Cannot connect to {addr}. Make sure the other side is running and the network is OK.
+status.protocol_mismatch=Protocol version mismatch (local v{local} / remote v{remote}). Upgrade both sides to the same version.
+status.session_ok=Connected to "{name}"
+status.disconnected_from=Disconnected from {name}
+status.auth_mismatch=Password mismatch
+status.auth_device_id=AuthResponse device_id does not match Hello ({a} != {b})
+status.auth_device_name=AuthResponse device_name does not match Hello ({a} != {b})
+
+# Toasts / runtime messages
+toast.text_received=Received text from peer
+toast.folder_save_fail=Folder received, but save failed: {error}
+toast.file_save_fail=File received, but save failed: {error}
+toast.file_clip_fail=File saved, but copy to clipboard failed: {error}
+toast.folder_label=Folder {name}
+toast.folder_received=Received folder: {name}
+toast.file_received=Received file: {name}
+toast.image_display_fail=Cannot display image: {error}
+toast.image_clip_fail=Copy image to clipboard failed: {error}
+toast.image_received=Received image ({dim})
+toast.device_connected=Connected to "{name}"; sync is ready
+toast.auth_fail_detail=Wrong password; could not connect to "{name}". Make sure both sides use the same password.
+toast.auth_fail_short=Password mismatch with "{name}"; connection failed
+toast.device_removed_peer="{name}" disconnected and was removed from the list
+toast.device_disconnected=Disconnected from "{name}"
+toast.text_oversize=This text is too large (~{kb} KB) for this PC's limit; not synced. Raise "Max size per sync" in Settings.
+toast.text_synced=Text synced to other devices
+toast.image_process_fail=Image processing failed: {error}
+toast.image_oversize=Image too large (~{mb} MB) for this PC's limit; not synced. Raise "Max size per sync" in Settings.
+toast.image_synced=Image synced to other devices ({width}×{height})
+toast.file_read_fail=Cannot read file: {error}
+toast.folder_synced=Folder synced: {name}
+toast.file_synced=File synced: {name}
+toast.save_fail=Save failed: {error}
+toast.password_insecure=Password saved, but it is still insecure; pairing remains blocked
+toast.password_updated=Password updated; new connections will use it
+toast.password_update_fail=Password update failed: {error}
+toast.port_restart=Ports saved; restart this app for them to take effect
+toast.autostart_on=Started with Windows / sign-in enabled
+toast.autostart_off=Start with Windows / sign-in disabled
+toast.autostart_fail=Autostart setting failed: {error}
+toast.settings_saved=Settings saved
+toast.device_removed=Removed device {addr}
+toast.ignore_on=Paused clipboard sync with {addr}
+toast.ignore_off=Resumed clipboard sync with {addr}
+toast.clients_refreshed=Device list refreshed
+toast.clients_refresh_fail=Failed to refresh device list: {error}
+toast.history_cleared=History and temporary received files cleared
+toast.history_clear_inbox_fail=History cleared, but cleaning received files failed: {error}
+toast.inbox_clear_history_fail=Received files cleared, but history clear may have failed
+toast.clear_fail=Clear failed: {error}
+toast.image_copied=Image copied; you can paste it
+toast.copied=Copied to clipboard
+toast.copy_fail=Copy failed: {error}
+toast.data_folder_opened=Opened data folder
+toast.data_folder_fail=Cannot open data folder: {error}
+toast.bad_manual_addr=Invalid address; use e.g. 192.168.1.10:3721
+toast.bad_device_addr=Invalid device address; try again
+toast.bad_device_addr_short=Invalid device address
+toast.language_changed=Language: {name}
+
+# Headless / GUI fallback console
+headless.title=OhMyCopy {version}  ·  headless mode
+headless.device_name=Device name : {name}
+headless.device_id=Device ID   : {id}
+headless.listen=Listen port : TCP/UDP {port}
+headless.sync=Sync        : {state}
+headless.on=On
+headless.off=Off
+headless.work_dir=Data folder : {path}
+headless.work_dir_hint=config.json / clients.json / history.db under ~/.ohmycopy
+headless.running=Clipboard sync is running in the background; use the same shared password on every device.
+headless.clients_hint=Set auto_connect=true in clients.json for automatic connections.
+headless.connect_hint=From a GUI PC, click Connect to this machine IP:{port}
+headless.ctrl_c=Press Ctrl+C to exit (or close this console)
+headless.tick=[{time}] {summary} (sessions {n})
+headless.exiting=Exiting headless mode…
+gui_fail.no_adapter=GUI could not start (no usable OpenGL 2.0+ / wgpu adapter).
+gui_fail.error=Error: {error}
+gui_fail.fallback=Switching to headless mode — clipboard sync keeps running.
+gui_fail.hint=You can also pass --headless or set OHMYCOPY_HEADLESS=1.
+gui_fail.detail=GUI failed to start (GPU/OpenGL/WARP may be unavailable).\nDetail: {error}\nTip: install GPU drivers, or ensure Microsoft Basic Render Driver (WARP) is available.
+gui_fail.no_adapter_listed=No usable graphics adapter. Enumerated: {list}
+
+# Crash / main
+main.panic_hint=Tip: set RUST_BACKTRACE=1 for a full stack trace
+main.crash_log_hint=A crash log is also written to crash.log under the data folder
+main.crash_title=OhMyCopy crashed
+main.start_fail=OhMyCopy failed to start: {error}
+main.press_enter=Press Enter to exit…
+main.start_fail_title=OhMyCopy failed to start
+
+# History kind labels (new entries)
+history.tag_file=[File]
+history.tag_folder=[Folder]
+history.tag_image=[Image]
+history.unnamed=Unnamed

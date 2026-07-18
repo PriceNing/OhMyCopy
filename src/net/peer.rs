@@ -26,10 +26,25 @@ pub struct PeerSnapshot {
     pub device_id: Uuid,
     pub name: String,
     pub addr: String,
+    /// Localized display label (via i18n at snapshot time).
     pub status: String,
+    /// Machine-readable status for UI logic (language-independent).
+    pub status_kind: PeerStatus,
     pub connected: bool,
     pub connecting: bool,
     pub last_error: Option<String>,
+}
+
+impl PeerStatus {
+    pub fn i18n_key(self) -> &'static str {
+        match self {
+            PeerStatus::Discovered => "peer.discovered",
+            PeerStatus::Connecting => "peer.connecting",
+            PeerStatus::Connected => "peer.connected",
+            PeerStatus::AuthFailed => "peer.auth_failed",
+            PeerStatus::Disconnected => "peer.disconnected",
+        }
+    }
 }
 
 impl PeerInfo {
@@ -38,13 +53,8 @@ impl PeerInfo {
             device_id: self.device_id,
             name: self.name.clone(),
             addr: self.addr.to_string(),
-            status: match self.status {
-                PeerStatus::Discovered => "已发现".into(),
-                PeerStatus::Connecting => "连接中…".into(),
-                PeerStatus::Connected => "已连接".into(),
-                PeerStatus::AuthFailed => "鉴权失败".into(),
-                PeerStatus::Disconnected => "已断开".into(),
-            },
+            status: crate::i18n::t(self.status.i18n_key()),
+            status_kind: self.status,
             connected: self.status == PeerStatus::Connected,
             connecting: self.status == PeerStatus::Connecting,
             last_error: self.last_error.clone(),

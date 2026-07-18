@@ -46,20 +46,24 @@ fn main() {
         if std::env::var_os("RUST_BACKTRACE").is_some() {
             eprintln!("{info}");
         } else {
-            eprintln!("提示: 设置环境变量 RUST_BACKTRACE=1 可显示完整调用栈");
-            eprintln!("崩溃日志也会写入 exe 目录下的 crash.log");
+            // i18n may not be inited yet on panic; English-safe fallback strings.
+            eprintln!("{}", ohmycopy::i18n::t("main.panic_hint"));
+            eprintln!("{}", ohmycopy::i18n::t("main.crash_log_hint"));
         }
-        ohmycopy::console_win::error_message_box("OhMyCopy 崩溃", &msg);
+        ohmycopy::console_win::error_message_box(&ohmycopy::i18n::t("main.crash_title"), &msg);
     }));
 
     if let Err(e) = real_main() {
-        let msg = format!("OhMyCopy 启动失败: {e:?}");
+        let msg = ohmycopy::i18n::t_args("main.start_fail", &[("error", &format!("{e:?}"))]);
         let _ = write_crash_log(&format!("{msg}\n"));
         ohmycopy::console_win::set_visible(true);
         eprintln!("{msg}");
-        eprintln!("按 Enter 退出…");
+        eprintln!("{}", ohmycopy::i18n::t("main.press_enter"));
         let _ = std::io::stdin().read_line(&mut String::new());
-        ohmycopy::console_win::error_message_box("OhMyCopy 启动失败", &format!("{e:#}"));
+        ohmycopy::console_win::error_message_box(
+            &ohmycopy::i18n::t("main.start_fail_title"),
+            &format!("{e:#}"),
+        );
         std::process::exit(1);
     }
 }
@@ -72,6 +76,8 @@ fn real_main() -> Result<()> {
 
     // Load config first so we know whether to show a console.
     let cfg = ohmycopy::config::Config::load_or_create()?;
+    // Init i18n early so headless banner / crash paths share the same catalogs as GUI.
+    let _ = ohmycopy::i18n::init_from_config(&cfg.language);
     // Headless / explicit console: show black console. Default GUI: never.
     let show_console = force_console || force_headless || cfg.console;
     if show_console {

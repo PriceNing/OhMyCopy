@@ -1,0 +1,191 @@
+# OhMyCopy 简体中文（源文件；编译时内嵌）
+# 格式: key=value  |  # 注释  |  {name} 占位符
+
+meta.native_name=简体中文
+meta.code=zh_cn
+
+app.subtitle=局域网剪贴板同步
+app.sync_on=同步：开
+app.sync_off=同步：关
+app.starting=启动中…
+app.local_device=本机：{name}
+
+tab.history=历史
+tab.devices=设备
+tab.settings=设置
+
+history.search=搜索
+history.filter_hint=过滤历史…
+history.clear=清空历史
+history.empty=暂无历史。复制文本、图片/截图或文件后将出现在这里。
+history.copy=复制
+
+devices.mine=我的设备
+devices.refresh=刷新列表
+devices.mine_help=连接成功后会显示在这里，并自动保持连接。「忽略」= 暂时不同步；「移除」= 断开并不再自动连接。
+devices.none=还没有设备。请在下方「附近设备」点连接，或手动填写对方电脑地址。
+devices.paused=已暂停同步
+devices.waiting=等待连接…
+devices.remove=移除
+devices.remove_hint=断开并移除这台设备
+devices.resume_sync=恢复同步
+devices.pause_sync=暂停同步
+devices.resume_hint=重新与这台设备同步剪贴板
+devices.pause_hint=暂时不同步，连接仍可保留
+devices.connected=已连接
+devices.connecting=连接中…
+devices.auto_reconnect=自动重连中
+devices.confirm_remove_title=确认移除
+devices.confirm_remove_body=确定移除「{name}」吗？
+devices.confirm_remove_detail=地址：{addr}\n移除后将断开，并不再自动连接这台设备。
+devices.cancel=取消
+devices.confirm_remove_btn=确认移除
+devices.nearby=附近设备
+devices.nearby_help=自动搜索同一网络中的 OhMyCopy。点「连接」并输入相同密码后即可同步。
+devices.nearby_none=暂时没有发现其他设备。请确认双方都已打开软件，并在同一网络（必要时检查防火墙是否拦截本软件）。
+devices.connect=连接
+devices.bad_password=密码错误
+devices.manual=手动添加
+devices.manual_hint=例如 192.168.1.10:3721
+devices.manual_help=填写对方电脑的 IP 和端口（默认 3721）。密码正确后会加入「我的设备」并自动保持连接。
+
+settings.basic=基本设置
+settings.device_name=设备名称
+settings.password=共享密码
+settings.hide=隐藏
+settings.show=显示
+settings.hide_password=隐藏密码
+settings.show_password=显示密码
+settings.tcp_port=连接端口
+settings.udp_port=发现端口
+settings.max_payload=单次同步上限
+settings.mb=MB
+settings.max_payload_help=限制本机发送和接收的单条内容大小（文字、图片、文件、文件夹）。发与收都按本机设置判断；两端不一致时，以较小的一方为准。传大文件请把两端都调大（例如 100）。
+settings.insecure_password=⚠ 请先设置自己的共享密码。密码为空或不安全时，无法与其他电脑配对和同步。
+settings.auto_start=开机或登录后自动启动
+settings.auto_start_help=勾选并保存后，下次登录电脑会自动打开 OhMyCopy。
+settings.start_tray=启动时最小化到托盘
+settings.start_tray_help=开启后启动时只在右下角托盘显示图标，不弹出主窗口（点击托盘可打开）。
+settings.save=保存设置
+settings.open_data=打开数据文件夹
+settings.open_data_hint=打开本软件的设置与接收文件存放位置
+settings.port_password_hint=提示：修改密码后新连接会立即使用新密码；修改端口后需要重启本软件才会生效。
+settings.data_path=文件保存在：{path}
+settings.data_path_fallback=文件保存在用户目录下的 .ohmycopy 文件夹
+settings.language=界面语言
+settings.language_help=界面显示语言。更改后立即生效。
+
+peer.discovered=已发现
+peer.connecting=连接中…
+peer.connected=已连接
+peer.auth_failed=鉴权失败
+peer.disconnected=已断开
+
+tray.show=显示主窗口
+tray.quit=退出
+tray.tooltip=OhMyCopy — 局域网剪贴板同步
+
+status.ready=已就绪，等待连接
+status.connecting=正在连接…
+status.connected_n=已连接 {n} 台设备
+status.need_password=请先在设置里填写自己的共享密码，然后才能连接其他电脑。
+status.firewall=无法使用端口 {port}（可能被占用或被防火墙拦截）。请换一个端口，或在系统防火墙中允许 OhMyCopy。
+status.no_peers=当前没有已连接的设备，内容未同步出去。
+status.sync_failed=同步失败，内容无法发送。
+status.oversize=内容过大，无法同步。请在设置中提高「单次同步上限」，或拆分文件。
+status.connecting_addr=正在连接 {addr} …
+status.unpaired=已解除配对
+status.peer_unpaired=对端已解除配对
+status.connect_timeout=连接超时
+status.connect_fail=无法连接 {addr}，请确认对方已打开软件且网络畅通
+status.protocol_mismatch=协议版本不匹配（本机 v{local} / 对端 v{remote}），请两端升级到同一版本
+status.session_ok=已与「{name}」连接成功
+status.disconnected_from=与 {name} 的连接已断开
+status.auth_mismatch=密码不匹配
+status.auth_device_id=AuthResponse device_id 与 Hello 不一致（{a} != {b}）
+status.auth_device_name=AuthResponse device_name 与 Hello 不一致（{a} != {b}）
+
+toast.text_received=已收到对方的文字
+toast.folder_save_fail=收到文件夹，但保存失败：{error}
+toast.file_save_fail=收到文件，但保存失败：{error}
+toast.file_clip_fail=文件已保存，但复制到剪贴板失败：{error}
+toast.folder_label=文件夹 {name}
+toast.folder_received=已收到文件夹：{name}
+toast.file_received=已收到文件：{name}
+toast.image_display_fail=图片无法显示：{error}
+toast.image_clip_fail=图片复制到剪贴板失败：{error}
+toast.image_received=已收到图片（{dim}）
+toast.device_connected=已连接「{name}」，可以同步了
+toast.auth_fail_detail=密码不正确，未能连接「{name}」。请确认双方密码一致。
+toast.auth_fail_short=与「{name}」密码不一致，连接失败
+toast.device_removed_peer=「{name}」已断开，并从列表中移除
+toast.device_disconnected=已与「{name}」断开连接
+toast.text_oversize=这段文字太大（约 {kb} KB），超过本机上限，未同步。可在设置中提高「单次同步上限」。
+toast.text_synced=文字已同步到其他设备
+toast.image_process_fail=图片处理失败：{error}
+toast.image_oversize=图片过大（约 {mb} MB），超过本机上限，未同步。可在设置中提高「单次同步上限」。
+toast.image_synced=图片已同步到其他设备（{width}×{height}）
+toast.file_read_fail=无法读取文件：{error}
+toast.folder_synced=文件夹已同步：{name}
+toast.file_synced=文件已同步：{name}
+toast.save_fail=保存失败：{error}
+toast.password_insecure=密码已保存，但当前密码不安全，仍无法配对同步
+toast.password_updated=密码已更新，之后新连接将使用新密码
+toast.password_update_fail=密码更新失败：{error}
+toast.port_restart=端口已保存，请重启本软件后生效
+toast.autostart_on=已开启开机自动启动
+toast.autostart_off=已关闭开机自动启动
+toast.autostart_fail=自动启动设置失败：{error}
+toast.settings_saved=设置已保存
+toast.device_removed=已移除设备 {addr}
+toast.ignore_on=已暂停与 {addr} 的剪贴板同步
+toast.ignore_off=已恢复与 {addr} 的剪贴板同步
+toast.clients_refreshed=设备列表已刷新
+toast.clients_refresh_fail=刷新设备列表失败：{error}
+toast.history_cleared=历史记录和接收的临时文件已清空
+toast.history_clear_inbox_fail=历史已清空，但清理接收文件失败：{error}
+toast.inbox_clear_history_fail=接收文件已清空，但历史记录清理可能失败
+toast.clear_fail=清空失败：{error}
+toast.image_copied=图片已复制，可以粘贴了
+toast.copied=已复制到剪贴板
+toast.copy_fail=复制失败: {error}
+toast.data_folder_opened=已打开数据文件夹
+toast.data_folder_fail=无法打开数据文件夹：{error}
+toast.bad_manual_addr=地址格式不对，请填写如 192.168.1.10:3721
+toast.bad_device_addr=设备地址无效，请重试
+toast.bad_device_addr_short=设备地址无效
+toast.language_changed=界面语言：{name}
+
+headless.title=OhMyCopy {version}  ·  无界面模式 (headless)
+headless.device_name=设备名称 : {name}
+headless.device_id=设备 ID  : {id}
+headless.listen=监听端口 : TCP/UDP {port}
+headless.sync=同步开关 : {state}
+headless.on=开
+headless.off=关
+headless.work_dir=工作目录 : {path}
+headless.work_dir_hint=config.json / clients.json / history.db 位于用户目录 ~/.ohmycopy
+headless.running=剪贴板同步已在后台运行；请确保各设备共享密码一致。
+headless.clients_hint=可在 clients.json 中设置 auto_connect=true 自动连接。
+headless.connect_hint=有 GUI 的电脑上点「连接」连到本机 IP:{port}
+headless.ctrl_c=按 Ctrl+C 退出（或关闭此控制台窗口）
+headless.tick=[{time}] {summary} (会话 {n})
+headless.exiting=正在退出无界面模式…
+gui_fail.no_adapter=图形界面无法启动（本机无可用 OpenGL 2.0+ / wgpu 适配器）。
+gui_fail.error=错误: {error}
+gui_fail.fallback=自动切换为【无界面模式】—— 剪贴板同步继续运行。
+gui_fail.hint=提示: 也可使用参数 --headless 或环境变量 OHMYCOPY_HEADLESS=1 直接进入。
+gui_fail.detail=图形界面启动失败（本机可能无可用 GPU/OpenGL/WARP）。\n详情: {error}\n建议: 安装显卡驱动，或确认 Windows 自带 Microsoft Basic Render Driver (WARP) 可用。
+gui_fail.no_adapter_listed=未找到可用图形适配器。已枚举: {list}
+
+main.panic_hint=提示: 设置环境变量 RUST_BACKTRACE=1 可显示完整调用栈
+main.crash_log_hint=崩溃日志也会写入数据目录下的 crash.log
+main.crash_title=OhMyCopy 崩溃
+main.start_fail=OhMyCopy 启动失败: {error}
+main.press_enter=按 Enter 退出…
+main.start_fail_title=OhMyCopy 启动失败
+
+history.tag_file=[文件]
+history.tag_folder=[文件夹]
+history.tag_image=[图片]
+history.unnamed=未命名
