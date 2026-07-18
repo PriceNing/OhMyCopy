@@ -56,3 +56,7 @@ panic = "abort"
 
 [dev-dependencies]
 tempfile = "3"
+
+# Windows .exe icon / version resource
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"

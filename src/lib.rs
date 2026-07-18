@@ -5,6 +5,7 @@ pub mod config;
 pub mod console_win;
 pub mod engine;
 pub mod history;
+pub mod icon;
 pub mod inbox;
 pub mod net;
 pub mod protocol;

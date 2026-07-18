@@ -1171,6 +1171,9 @@ fn viewport_builder(start_minimized_to_tray: bool) -> egui::ViewportBuilder {
         .with_inner_size([720.0, 520.0])
         .with_min_inner_size([480.0, 360.0])
         .with_title(tray::WINDOW_TITLE);
+    if let Ok(icon) = ohmycopy::icon::egui_icon_data() {
+        vb = vb.with_icon(icon);
+    }
     if start_minimized_to_tray {
         // Create window hidden; tray left-click / menu will show it.
         vb = vb.with_visible(false);

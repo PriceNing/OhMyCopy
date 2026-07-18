@@ -104,7 +104,10 @@ powershell -ExecutionPolicy Bypass -File scripts/run_auto_tests.ps1
 ```text
 cargo build --release
 # 将 target/release/ohmycopy.exe 拷贝到发布目录即可（便携）
+# Windows：exe 已嵌入 assets/ohmycopy.ico；窗口/托盘使用 assets/icon.png、tray.png
 ```
+
+图标源文件在 `assets/`（`ohmycopy.ico` / `icon.png` / `tray.png`）。
 
 ## 技术栈
 

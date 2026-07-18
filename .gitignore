@@ -19,3 +19,6 @@ __pycache__/
 *.pyc
 .DS_Store
 Thumbs.db
+
+# keep designed icons; ignore accidental huge intermediates if any
+# assets/*.png and assets/*.ico are tracked

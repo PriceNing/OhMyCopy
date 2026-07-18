@@ -76,7 +76,12 @@ impl AppTray {
             .context("tray menu separator")?;
         menu.append(&item_quit).context("tray menu append quit")?;
 
-        let icon = make_tray_icon().context("tray icon")?;
+        let icon = crate::icon::tray_icon()
+            .or_else(|e| {
+                tracing::warn!(error = %e, "embedded tray icon failed, using procedural fallback");
+                make_tray_icon()
+            })
+            .context("tray icon")?;
         // Right-click = menu; left-click = app event (show window). Default is left=menu.
         let tray = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
