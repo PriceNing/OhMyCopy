@@ -653,7 +653,6 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                         let ev = {
                             let mut core = eng.lock();
                             if core.note_oversize_local(text.len() as u64) {
-                                let max = core.max_payload_bytes;
                                 drop(core);
                                 ui_c.lock().toast = Some(format!(
                                     "这段文字太大（约 {} KB），超过本机上限，未同步。可在设置中提高「单次同步上限」。",
