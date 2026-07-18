@@ -99,15 +99,33 @@ powershell -ExecutionPolicy Bypass -File scripts/run_auto_tests.ps1
 大文件：`$env:OHMYCOPY_E2E_LARGE_MB=20`。  
 本机↔虚拟机真剪贴板：`python scripts/vm_ssh_smoke.py`（见 [docs/auto-test.md](docs/auto-test.md)）。
 
-### 发布包
+### 发布流程（便携版）
 
-```text
-cargo build --release
-# 将 target/release/ohmycopy.exe 拷贝到发布目录即可（便携）
-# Windows：exe 已嵌入 assets/ohmycopy.ico；窗口/托盘使用 assets/icon.png、tray.png
+当前**没有安装器/商店流水线**，发布物是「单 exe + 说明」便携包。
+
+| 步骤 | 做什么 | 产物位置 |
+|------|--------|----------|
+| 1. 开发构建 | `cargo build --release` | **`target/release/ohmycopy.exe`**（编译输出，不是 dist） |
+| 2. 测试 | `scripts\run_auto_tests.ps1`（可选配 VM） | 无发布物 |
+| 3. 打包 | `scripts\package_release.ps1` | **`dist/OhMyCopy-<版本>/`** + **`dist/OhMyCopy-<版本>.zip`** + `dist/ohmycopy.exe` |
+| 4. 分发 | 把 zip 或文件夹拷给用户 | 用户解压后运行 `ohmycopy.exe` |
+
+```powershell
+# 一键：测一遍 + release 构建 + 写入 dist/
+powershell -ExecutionPolicy Bypass -File scripts\package_release.ps1
+
+# 已测过、只打包
+powershell -ExecutionPolicy Bypass -File scripts\package_release.ps1 -SkipTests
 ```
 
-图标源文件在 `assets/`（`ohmycopy.ico` / `icon.png` / `tray.png`）。
+**为什么默认看不到 dist 里的 exe？**
+
+1. `cargo build` **只会**写到 `target/release/`，**不会**自动拷到 `dist/`。  
+2. 清理垃圾时 `dist/` 被清空，只保留占位文件 `dist/.gitkeep`。  
+3. `.gitignore` 忽略 `dist/*`（除 `.gitkeep`），避免把运行配置、inbox、exe 提交进 Git/SVN。  
+4. 需要发布目录时，请跑上面的 **`package_release.ps1`**。
+
+图标：`assets/ohmycopy.ico` 编进 exe；窗口/托盘用 `assets/icon.png`、`tray.png`。
 
 ## 技术栈
 
