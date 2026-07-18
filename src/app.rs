@@ -1203,8 +1203,13 @@ fn viewport_builder(start_minimized_to_tray: bool) -> egui::ViewportBuilder {
         vb = vb.with_icon(icon);
     }
     if start_minimized_to_tray {
-        // Create window hidden; tray left-click / menu will show it.
-        vb = vb.with_visible(false);
+        // Reduce first-frame flash on Windows: invisible, not focused, no taskbar,
+        // and create far off-screen until we hide via Win32.
+        vb = vb
+            .with_visible(false)
+            .with_active(false)
+            .with_taskbar(false)
+            .with_position(egui::pos2(-32000.0, -32000.0));
     }
     vb
 }
@@ -1315,6 +1320,10 @@ fn run_gui(
     cmd_tx_ui: mpsc::UnboundedSender<UiCommand>,
 ) -> Result<()> {
     let start_hidden = ui_for_eframe.start_minimized_to_tray;
+    // Kill the common Windows flash: winit may still briefly map the window.
+    if start_hidden {
+        tray::spawn_startup_hide_guard(tray::WINDOW_TITLE);
+    }
     let make_app = |ui_state: UiState, shared: Arc<Mutex<UiState>>, tx: mpsc::UnboundedSender<UiCommand>| {
         move |cc: &eframe::CreationContext<'_>| {
             let true_quit = Arc::new(AtomicBool::new(false));
@@ -1339,14 +1348,24 @@ fn run_gui(
                     None
                 }
             };
+            // Hide as early as CreationContext (before first paint when possible).
+            if start_min {
+                cc.egui_ctx
+                    .send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                cc.egui_ctx
+                    .send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+                        -32000.0, -32000.0,
+                    )));
+                let _ = tray::win32_set_window_visible_quiet(tray::WINDOW_TITLE, false);
+            }
             Ok(Box::new(AppShell {
                 inner: OhMyCopyApp::new(cc, ui_state),
                 ui_shared: shared,
                 cmd_tx: tx,
                 tray,
                 true_quit,
-                // Force-hide once more on first frame (some backends flash despite with_visible(false)).
-                hide_on_start: start_min,
+                // Keep re-hiding for several frames (backends re-show during init).
+                hide_on_start_frames: if start_min { 30 } else { 0 },
             }) as Box<dyn eframe::App>)
         }
     };
@@ -1359,6 +1378,7 @@ fn run_gui(
             hardware_acceleration: eframe::HardwareAcceleration::Preferred,
             wgpu_options: wgpu_options(),
             vsync: true,
+            centered: !start_hidden,
             ..Default::default()
         };
         tracing::info!(start_hidden, "trying GUI backend: wgpu");
@@ -1385,6 +1405,7 @@ fn run_gui(
             renderer: eframe::Renderer::Glow,
             hardware_acceleration: eframe::HardwareAcceleration::Off,
             vsync: true,
+            centered: !start_hidden,
             ..Default::default()
         };
         tracing::info!("trying GUI backend: glow (OpenGL, hw accel off)");
@@ -1411,6 +1432,7 @@ fn run_gui(
             renderer: eframe::Renderer::Glow,
             hardware_acceleration: eframe::HardwareAcceleration::Preferred,
             vsync: true,
+            centered: !start_hidden,
             ..Default::default()
         };
         tracing::info!("trying GUI backend: glow (OpenGL preferred)");
@@ -1436,8 +1458,8 @@ struct AppShell {
     tray: Option<AppTray>,
     /// When true, window close actually exits (tray "退出").
     true_quit: Arc<AtomicBool>,
-    /// One-shot: hide main window right after first frame (start minimized to tray).
-    hide_on_start: bool,
+    /// Frames left to re-apply hide (start minimized to tray; kills first-frame flash).
+    hide_on_start_frames: u32,
 }
 
 fn peers_eq(a: &[ohmycopy::net::peer::PeerSnapshot], b: &[ohmycopy::net::peer::PeerSnapshot]) -> bool {
@@ -1483,13 +1505,18 @@ impl eframe::App for AppShell {
         // the window is hidden (eframe often stops updating when invisible).
         ctx.request_repaint_after(std::time::Duration::from_millis(400));
 
-        // Start minimized to tray: hide once after window exists (covers backends
-        // that ignore ViewportBuilder::with_visible(false)).
-        if self.hide_on_start {
-            self.hide_on_start = false;
+        // Start minimized to tray: keep re-hiding for several frames so winit/eframe
+        // cannot flash the main window during first paint / adapter setup.
+        if self.hide_on_start_frames > 0 {
+            self.hide_on_start_frames -= 1;
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            tray::win32_set_window_visible(tray::WINDOW_TITLE, false);
-            tracing::info!("start_minimized_to_tray: main window hidden, tray only");
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+                -32000.0, -32000.0,
+            )));
+            let _ = tray::win32_set_window_visible_quiet(tray::WINDOW_TITLE, false);
+            if self.hide_on_start_frames == 0 {
+                tracing::info!("start_minimized_to_tray: main window hidden, tray only");
+            }
         }
 
         // --- Close to tray (X hides; tray "退出" quits) ---
@@ -1511,10 +1538,16 @@ impl eframe::App for AppShell {
             for action in tray.drain_actions() {
                 match action {
                     TrayAction::ShowWindow => {
-                        tray::win32_set_window_visible(tray::WINDOW_TITLE, true);
+                        // Cancel any remaining startup-hide frames.
+                        self.hide_on_start_frames = 0;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                        // Center-ish restore; Win32 SHOW will place it back on-screen.
+                        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+                            120.0, 80.0,
+                        )));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                        tray::win32_set_window_visible(tray::WINDOW_TITLE, true);
                         ctx.request_repaint();
                     }
                     TrayAction::Quit => {

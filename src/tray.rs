@@ -242,24 +242,65 @@ fn make_tray_icon() -> Result<Icon> {
 /// Force show/hide by window title (eframe ViewportCommand is unreliable when hidden).
 #[cfg(windows)]
 pub fn win32_set_window_visible(title: &str, visible: bool) {
+    if !win32_set_window_visible_quiet(title, visible) && visible {
+        tracing::warn!(%title, "FindWindowW failed for tray show");
+    }
+}
+
+/// Like [`win32_set_window_visible`], but does not log when the HWND is not found yet.
+/// Returns true if the window was found.
+#[cfg(windows)]
+pub fn win32_set_window_visible_quiet(title: &str, visible: bool) -> bool {
     unsafe {
         let hwnd = find_main_hwnd(title);
         if hwnd.is_null() {
-            tracing::warn!(%title, "FindWindowW failed for tray show/hide");
-            return;
+            return false;
         }
         if visible {
-            // SW_RESTORE then SW_SHOW; also clear minimized / activate.
+            // Bring back from off-screen / hidden start.
             ShowWindow(hwnd, SW_RESTORE);
             ShowWindow(hwnd, SW_SHOW);
             SetForegroundWindow(hwnd);
-            // Nudge the message queue so winit/eframe wake if they were waiting.
             PostMessageW(hwnd, WM_NULL, 0, 0);
         } else {
+            // Hide + kick off-screen so a brief show still won't flash on the desktop.
             ShowWindow(hwnd, SW_HIDE);
+            let _ = SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                -32000,
+                -32000,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
         }
+        true
     }
 }
+
+/// Poll and hide the main window for a short period (kills first-frame flash on Windows).
+#[cfg(windows)]
+pub fn spawn_startup_hide_guard(title: &'static str) {
+    std::thread::Builder::new()
+        .name("ohmycopy-hide-guard".into())
+        .spawn(move || {
+            // ~2s of aggressive hide while winit/eframe create the HWND.
+            for _ in 0..100 {
+                let _ = win32_set_window_visible_quiet(title, false);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        })
+        .ok();
+}
+
+#[cfg(not(windows))]
+pub fn win32_set_window_visible_quiet(_title: &str, _visible: bool) -> bool {
+    false
+}
+
+#[cfg(not(windows))]
+pub fn spawn_startup_hide_guard(_title: &'static str) {}
 
 #[cfg(windows)]
 pub fn win32_request_close(title: &str) {
@@ -302,6 +343,12 @@ const SW_RESTORE: i32 = 9;
 const WM_CLOSE: u32 = 0x0010;
 #[cfg(windows)]
 const WM_NULL: u32 = 0x0000;
+#[cfg(windows)]
+const SWP_NOSIZE: u32 = 0x0001;
+#[cfg(windows)]
+const SWP_NOZORDER: u32 = 0x0004;
+#[cfg(windows)]
+const SWP_NOACTIVATE: u32 = 0x0010;
 
 #[cfg(windows)]
 #[link(name = "user32")]
@@ -309,6 +356,15 @@ unsafe extern "system" {
     fn FindWindowW(lp_class: *const u16, lp_window: *const u16) -> *mut core::ffi::c_void;
     fn ShowWindow(hwnd: *mut core::ffi::c_void, n_cmd_show: i32) -> i32;
     fn SetForegroundWindow(hwnd: *mut core::ffi::c_void) -> i32;
+    fn SetWindowPos(
+        hwnd: *mut core::ffi::c_void,
+        hwnd_insert_after: *mut core::ffi::c_void,
+        x: i32,
+        y: i32,
+        cx: i32,
+        cy: i32,
+        flags: u32,
+    ) -> i32;
     fn PostMessageW(
         hwnd: *mut core::ffi::c_void,
         msg: u32,
