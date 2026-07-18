@@ -3,5 +3,19 @@
 .idea/
 .vscode/
 *.pdb
-dist/*.exe
-!dist/.gitkeep
+*.log
+*.tmp
+*.bak
+app.pid
+
+# local run / release drop folder (keep placeholder only)
+/dist/*
+!/dist/.gitkeep
+
+# e2e workspaces (if recreated under target or repo root)
+/e2e_*/
+/tmp/
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
