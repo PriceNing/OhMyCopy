@@ -10,7 +10,7 @@
   "discover_interval_secs": 5,
   "theme": "dark_glass",
   "auto_start": false,
-  "start_minimized_to_tray": false,
   "sync_enabled": true,
-  "console": false
+  "console": false,
+  "start_minimized_to_tray": false
 }
