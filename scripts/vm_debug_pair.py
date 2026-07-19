@@ -11,11 +11,11 @@ from pathlib import Path
 
 import paramiko
 
-ROOT = Path(r"D:\myrepo\code\rust\OhMyCopy")
+ROOT = Path(__file__).resolve().parents[1]
 EXE = ROOT / "target" / "release" / "ohmycopy.exe"
 PROBE = next((ROOT / "target" / "release").rglob("clip_probe.exe"))
-host = "192.168.75.201"
-user = "NRC"
+host = os.environ["OHMYCOPY_VM_HOST"]
+user = os.environ["OHMYCOPY_VM_USER"]
 password = os.environ["OHMYCOPY_VM_PASSWORD"]
 work = ROOT / "target" / "e2e_dbg"
 if work.exists():
