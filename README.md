@@ -51,15 +51,49 @@ cargo build --release
 4. 已配对设备会自动重连；一侧复制文本/图片/文件/文件夹，另一侧约 1 秒内可粘贴  
    - 修改 **端口** 后需**重启应用**；修改密码会热更新（新连接立即生效）  
 
+#### Linux 依赖（重要）
+
+GitHub 上的 Linux 二进制会链接 **GTK3**（托盘/界面）和 **libxdo**（托盘相关）。若出现：
+
+```text
+error while loading shared libraries: libxdo.so.3: cannot open shared object file
+```
+
+请先安装系统库（Debian / Ubuntu / 同类）：
+
+```bash
+sudo apt update
+sudo apt install -y libxdo3 libgtk-3-0 libayatana-appindicator3-1 \
+  libxcb-render0 libxcb-shape0 libxcb-xfixes0
+```
+
+Fedora：
+
+```bash
+sudo dnf install gtk3 libxdo libappindicator-gtk3
+```
+
+然后：
+
+```bash
+chmod +x ohmycopy-linux-x64   # 或解压 tar 后的 ohmycopy
+./ohmycopy-linux-x64
+# 无界面：
+./ohmycopy-linux-x64 --headless
+```
+
+推荐下载 **`OhMyCopy-linux-x64.tar.gz`**（较新的构建会自带 `lib/libxdo.so.3` 与 `run-ohmycopy.sh`），不要只拷贝单个无依赖说明的裸二进制到极简系统。
+
 #### 无显卡 / 无 OpenGL 的机器
 
 若 GUI 不可用，可无界面运行（同步仍可用）：
 
 ```bash
+# Windows
 ohmycopy.exe --headless
-# 或
-set OHMYCOPY_HEADLESS=1
-ohmycopy.exe
+
+# Linux / macOS
+./ohmycopy --headless
 ```
 
 Windows 上 headless 若需读写**桌面剪贴板**，请在已登录的交互会话启动（例如计划任务 `/IT`），避免 Session 0。

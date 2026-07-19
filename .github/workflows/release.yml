@@ -105,17 +105,61 @@ jobs:
           cp "$BIN" "$STAGE/${{ matrix.asset_name }}"
           cp "$BIN" "$STAGE/${{ matrix.bin_name }}"
 
+          # Linux: bundle libxdo (from tray-icon/enigo) so bare Debian does not fail with
+          # "libxdo.so.3: cannot open shared object file" even for --headless.
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            mkdir -p "$STAGE/lib"
+            # Prefer multiarch path; fall back to ldconfig lookup.
+            for cand in \
+              /usr/lib/x86_64-linux-gnu/libxdo.so.3 \
+              /usr/lib64/libxdo.so.3 \
+              /usr/lib/libxdo.so.3; do
+              if [[ -f "$cand" ]]; then cp -aL "$cand" "$STAGE/lib/"; break; fi
+            done
+            if [[ ! -f "$STAGE/lib/libxdo.so.3" ]]; then
+              # resolve via ldconfig if only soname is registered
+              so=$(ldconfig -p 2>/dev/null | awk '/libxdo\.so\.3/ {print $NF; exit}')
+              if [[ -n "${so:-}" && -f "$so" ]]; then cp -aL "$so" "$STAGE/lib/libxdo.so.3"; fi
+            fi
+            if [[ -f "$STAGE/lib/libxdo.so.3" ]]; then
+              sudo apt-get install -y patchelf >/dev/null
+              patchelf --set-rpath '$ORIGIN/lib' "$STAGE/${{ matrix.asset_name }}"
+              patchelf --set-rpath '$ORIGIN/lib' "$STAGE/${{ matrix.bin_name }}"
+              printf '%s\n' \
+                '#!/usr/bin/env bash' \
+                'set -euo pipefail' \
+                'DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' \
+                'export LD_LIBRARY_PATH="${DIR}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' \
+                'exec "${DIR}/ohmycopy" "$@"' \
+                > "$STAGE/run-ohmycopy.sh"
+              chmod +x "$STAGE/run-ohmycopy.sh"
+            else
+              echo "WARNING: libxdo.so.3 not found on builder; users need package libxdo3" >&2
+            fi
+          fi
+
           {
             echo "OhMyCopy ${VER} — ${{ matrix.name }}"
             echo ""
             echo "Run:"
             echo "  Windows: double-click ohmycopy.exe  (or ${{ matrix.asset_name }})"
-            echo "  Linux/macOS: chmod +x ohmycopy && ./ohmycopy"
+            echo "  Linux:   chmod +x ohmycopy && ./ohmycopy"
+            echo "           (or: ./run-ohmycopy.sh)"
+            echo "  macOS:   chmod +x ohmycopy && ./ohmycopy"
+            echo "           (if blocked: xattr -dr com.apple.quarantine .)"
             echo ""
             echo "Headless:  ./ohmycopy --headless"
             echo "Config:    ~/.ohmycopy  (Windows: %USERPROFILE%\\.ohmycopy)"
             echo "Password:  same on all devices. Port TCP/UDP 3721."
             echo ""
+            if [[ "${{ runner.os }}" == "Linux" ]]; then
+              echo "Linux desktop deps (if GUI fails after libxdo is bundled):"
+              echo "  Debian/Ubuntu:"
+              echo "    sudo apt install libgtk-3-0 libxdo3 libayatana-appindicator3-1 libxcb-render0 libxcb-shape0 libxcb-xfixes0"
+              echo "  Fedora:"
+              echo "    sudo dnf install gtk3 libxdo libappindicator-gtk3"
+              echo ""
+            fi
             echo "https://github.com/PriceNing/OhMyCopy"
           } > "$STAGE/README.txt"
 
@@ -135,7 +179,18 @@ jobs:
               tar -czf "dist-out/${{ matrix.archive }}" -C "$STAGE" .
               ;;
           esac
+          # Standalone linux binary alone is NOT enough without lib/ — prefer the tar.gz.
+          # Still publish the renamed binary for convenience when system libxdo is installed.
           cp "$STAGE/${{ matrix.asset_name }}" "dist-out/${{ matrix.asset_name }}"
+          if [[ -d "$STAGE/lib" ]]; then
+            # Also publish a self-contained mini bundle as zip of binary+lib for the standalone name case
+            mkdir -p "dist-out/_bundle"
+            cp "$STAGE/${{ matrix.asset_name }}" "dist-out/_bundle/"
+            cp -a "$STAGE/lib" "dist-out/_bundle/"
+            if [[ -f "$STAGE/run-ohmycopy.sh" ]]; then cp "$STAGE/run-ohmycopy.sh" "dist-out/_bundle/"; fi
+            tar -czf "dist-out/${{ matrix.asset_name }}-with-libs.tar.gz" -C "dist-out/_bundle" .
+            rm -rf "dist-out/_bundle"
+          fi
           ls -la dist-out
 
       - name: Upload workflow artifacts
