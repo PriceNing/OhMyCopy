@@ -326,7 +326,7 @@ fn clipboard_thread(rx: Receiver<ClipRequest>, suppress_fp: Arc<Mutex<Option<Str
                     *suppress_fp.lock() =
                         Some(ClipContent::Files(paths.clone()).fingerprint());
                 }
-                let result = set_files_os(&paths);
+                let result = set_files_resilient(&mut clipboard, &paths);
                 if result.is_err() && from_sync {
                     *suppress_fp.lock() = None;
                 }
@@ -675,7 +675,14 @@ fn linux_cli_set_png(png: &[u8]) -> Result<()> {
 }
 
 fn read_clip_content(clipboard: &mut Clipboard) -> Result<ClipContent> {
-    let files = get_files_os().unwrap_or_default();
+    // Prefer real file-list formats (Win CF_HDROP / Linux text/uri-list via arboard).
+    // Do NOT treat plain text that happens to look like a path as a file list —
+    // copying a "file name" as text must stay Text.
+    let files = get_files_from_clipboard(clipboard)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| p.exists())
+        .collect::<Vec<_>>();
 
     // WeChat / some tools: single image as CF_HDROP temp path → treat as Image.
     if files.len() == 1 && looks_like_image_path(&files[0]) {
@@ -689,7 +696,7 @@ fn read_clip_content(clipboard: &mut Clipboard) -> Result<ClipContent> {
         }
     }
 
-    // Real multi-file / folder / non-image files.
+    // Real multi-file / folder / non-image files from file-list MIME only.
     if !files.is_empty()
         && (files.len() > 1
             || files.iter().any(|p| p.is_dir() || !looks_like_image_path(p)))
@@ -707,7 +714,7 @@ fn read_clip_content(clipboard: &mut Clipboard) -> Result<ClipContent> {
         }
     }
 
-    // Single image path we could not decode → still sync as file.
+    // Single image path we could not decode → still sync as file (only if file-list).
     if files.len() == 1 {
         return Ok(ClipContent::Files(files));
     }
@@ -1006,25 +1013,160 @@ mod win_extra {
     const _: u32 = GMEM_MOVEABLE;
 }
 
-#[cfg(windows)]
-fn get_files_os() -> Result<Vec<PathBuf>> {
-    win_hdrop::get_files()
+/// Read file paths from the OS clipboard (CF_HDROP on Windows, text/uri-list on Linux/macOS).
+fn get_files_from_clipboard(clipboard: &mut Clipboard) -> Result<Vec<PathBuf>> {
+    #[cfg(windows)]
+    {
+        // Prefer native HDROP (more reliable with Explorer); also try arboard.
+        if let Ok(paths) = win_hdrop::get_files() {
+            if !paths.is_empty() {
+                return Ok(paths);
+            }
+        }
+    }
+    match clipboard.get().file_list() {
+        Ok(paths) => Ok(paths),
+        Err(e) => {
+            tracing::trace!(error = %e, "clipboard file_list empty/unavailable");
+            Ok(Vec::new())
+        }
+    }
 }
 
-#[cfg(windows)]
-fn set_files_os(paths: &[PathBuf]) -> Result<()> {
-    win_hdrop::set_files(paths)
+fn set_files_resilient(clipboard: &mut Option<Clipboard>, paths: &[PathBuf]) -> Result<()> {
+    if paths.is_empty() {
+        bail!("empty file list");
+    }
+
+    #[cfg(windows)]
+    {
+        if let Ok(()) = win_hdrop::set_files(paths) {
+            return Ok(());
+        }
+    }
+
+    let mut last_err = None;
+    for attempt in 0..3 {
+        if let Ok(cb) = ensure_clipboard(clipboard) {
+            match cb.set().file_list(paths) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    last_err = Some(anyhow::anyhow!("{e}"));
+                    *clipboard = None;
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(30 * (attempt + 1) as u64));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if linux_cli_set_uri_list(paths).is_ok() {
+            tracing::info!("clipboard file list set via xclip text/uri-list");
+            return Ok(());
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| {
+        anyhow::anyhow!(
+            "could not put files on the system clipboard (install xclip on Linux if needed)"
+        )
+    }))
 }
 
-#[cfg(not(windows))]
-fn get_files_os() -> Result<Vec<PathBuf>> {
-    // No portable file-list API via arboard; text-only for now.
-    Ok(Vec::new())
+#[cfg(target_os = "linux")]
+fn linux_cli_set_uri_list(paths: &[PathBuf]) -> Result<()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    // text/uri-list: one file:// URI per line, CRLF, ends with empty line (RFC 2483).
+    let mut body = String::new();
+    for p in paths {
+        let abs = if p.is_absolute() {
+            p.clone()
+        } else {
+            std::env::current_dir()
+                .unwrap_or_default()
+                .join(p)
+        };
+        // Simple URI: file:///path (percent-encode spaces).
+        let s = abs.to_string_lossy().replace('\\', "/");
+        let uri = if s.starts_with('/') {
+            format!("file://{}", s.replace(' ', "%20"))
+        } else {
+            format!("file:///{}", s.replace(' ', "%20"))
+        };
+        body.push_str(&uri);
+        body.push_str("\r\n");
+    }
+
+    if which_cmd("xclip") {
+        let mut child = Command::new("xclip")
+            .args(["-selection", "clipboard", "-t", "text/uri-list"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .context("spawn xclip uri-list")?;
+        child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("xclip stdin"))?
+            .write_all(body.as_bytes())?;
+        if child.wait()?.success() {
+            return Ok(());
+        }
+    }
+    bail!("xclip uri-list failed")
 }
 
-#[cfg(not(windows))]
-fn set_files_os(_paths: &[PathBuf]) -> Result<()> {
-    bail!("当前平台暂不支持将文件放入系统剪贴板")
+/// True if `s` should be treated as a filesystem path for history re-copy
+/// (not a bare relative file name like "notes.txt" which is plain text).
+pub fn content_looks_like_absolute_path(s: &str) -> bool {
+    let t = s.trim();
+    if t.is_empty() || t.contains('\n') {
+        return false;
+    }
+    // Platform-native absolute (Windows drive, Unix root on Unix, etc.).
+    if std::path::Path::new(t).is_absolute() {
+        return true;
+    }
+    // Always treat Unix-style absolute paths as absolute (even when tests run on Windows).
+    if t.starts_with('/') {
+        return true;
+    }
+    // Windows drive paths (also when heuristic is used cross-platform).
+    let bytes = t.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
+    {
+        return true;
+    }
+    false
+}
+
+#[cfg(test)]
+mod path_heuristic_tests {
+    use super::content_looks_like_absolute_path;
+
+    #[test]
+    fn bare_filename_is_not_path() {
+        assert!(!content_looks_like_absolute_path("readme.md"));
+        assert!(!content_looks_like_absolute_path("notes.txt"));
+        assert!(!content_looks_like_absolute_path("  photo.png  "));
+    }
+
+    #[test]
+    fn absolute_unix_path_is_path() {
+        assert!(content_looks_like_absolute_path("/home/user/a.txt"));
+        assert!(content_looks_like_absolute_path("/tmp/x"));
+    }
+
+    #[test]
+    fn absolute_windows_path_is_path() {
+        assert!(content_looks_like_absolute_path(r"C:\Users\a\b.txt"));
+        assert!(content_looks_like_absolute_path("D:/data/file.bin"));
+    }
 }
 
 #[cfg(windows)]

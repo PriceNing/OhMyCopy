@@ -1,6 +1,6 @@
 [package]
 name = "ohmycopy"
-version = "0.1.38"
+version = "0.1.39"
 edition = "2021"
 description = "Lightweight LAN clipboard sync for Windows, Linux, and macOS"
 license = "MIT"

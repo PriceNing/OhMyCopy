@@ -1064,9 +1064,15 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                         }
                     }
                     UiCommand::CopyText(text) => {
-                        // History re-copy: file/folder/image rows store local path in content.
+                        // History re-copy:
+                        // - file/image rows store an absolute local path in `content`
+                        // - text rows store the raw text (may look like a short file name!)
+                        // Only treat as filesystem object when content is an absolute path
+                        // that still exists — never promote "readme.md" text to a file.
                         let path = std::path::PathBuf::from(&text);
-                        let result = if path.is_file() {
+                        let as_path = ohmycopy::clipboard::content_looks_like_absolute_path(&text)
+                            && (path.is_file() || path.is_dir());
+                        let result = if as_path && path.is_file() {
                             let is_png = path
                                 .extension()
                                 .and_then(|e| e.to_str())
@@ -1083,12 +1089,31 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                     Err(e) => Err(anyhow::anyhow!(e)),
                                 }
                             } else {
-                                clip.set_files_from_sync(&[path])
-                                    .map(|_| ohmycopy::i18n::t("toast.copied"))
+                                // Prefer real file-list MIME; if OS rejects, fall back to path text.
+                                match clip.set_files_from_sync(&[path.clone()]) {
+                                    Ok(()) => Ok(ohmycopy::i18n::t("toast.copied")),
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            error = %e,
+                                            "set file list failed; falling back to path as text"
+                                        );
+                                        clip.set_text_local(&text)
+                                            .map(|_| ohmycopy::i18n::t("toast.copied"))
+                                    }
+                                }
                             }
-                        } else if path.is_dir() {
-                            clip.set_files_from_sync(&[path])
-                                .map(|_| ohmycopy::i18n::t("toast.copied"))
+                        } else if as_path && path.is_dir() {
+                            match clip.set_files_from_sync(&[path]) {
+                                Ok(()) => Ok(ohmycopy::i18n::t("toast.copied")),
+                                Err(e) => {
+                                    tracing::warn!(
+                                        error = %e,
+                                        "set folder list failed; falling back to path as text"
+                                    );
+                                    clip.set_text_local(&text)
+                                        .map(|_| ohmycopy::i18n::t("toast.copied"))
+                                }
+                            }
                         } else {
                             clip.set_text_local(&text)
                                 .map(|_| ohmycopy::i18n::t("toast.copied"))
