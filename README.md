@@ -1,6 +1,6 @@
 # OhMyCopy
 
-轻量级**局域网**跨设备剪贴板同步（Windows / Linux）
+轻量级**局域网**跨设备剪贴板同步（Windows / Linux / macOS）
 
 - 对等架构：无中心服务器，每台既监听也连接  
 - TCP 加密同步 + UDP 广播/多播发现  
@@ -106,30 +106,32 @@ powershell -ExecutionPolicy Bypass -File scripts/run_auto_tests.ps1
 大文件：`$env:OHMYCOPY_E2E_LARGE_MB=20`。  
 本机↔虚拟机真剪贴板：`python scripts/vm_ssh_smoke.py`（见 [docs/auto-test.md](docs/auto-test.md)）。
 
-### 发布流程（便携版）
+### 发布流程（多平台）
 
-当前**没有安装器/商店流水线**，发布物是「单 exe + 说明」便携包。
+**官方二进制**由 GitHub Actions 在打 tag 时构建，挂到 [Releases](https://github.com/PriceNing/OhMyCopy/releases)：
 
-| 步骤 | 做什么 | 产物位置 |
-|------|--------|----------|
-| 1. 开发构建 | `cargo build --release` | **`target/release/ohmycopy.exe`**（编译输出，不是 dist） |
-| 2. 测试 | `scripts\run_auto_tests.ps1`（可选配 VM） | 无发布物 |
-| 3. 打包 | `scripts\package_release.ps1` | **`dist/OhMyCopy-<版本>/`** + **`dist/OhMyCopy-<版本>.zip`** + `dist/ohmycopy.exe` |
-| 4. 分发 | 把 zip 拷给用户，或挂到 GitHub Releases | 用户解压后运行 `ohmycopy.exe` |
+| 资源 | 平台 |
+|------|------|
+| `OhMyCopy-windows-x64.zip` / `ohmycopy-windows-x64.exe` | Windows x64 |
+| `OhMyCopy-linux-x64.tar.gz` / `ohmycopy-linux-x64` | Linux x64 |
+| `OhMyCopy-macos-arm64.tar.gz` / `ohmycopy-macos-arm64` | macOS Apple Silicon |
+| `OhMyCopy-macos-x64.tar.gz` / `ohmycopy-macos-x64` | macOS Intel |
 
-```powershell
-# 一键：测一遍 + release 构建 + 写入 dist/
-powershell -ExecutionPolicy Bypass -File scripts\package_release.ps1
+```bash
+# 发新版：改 Cargo.toml 版本 + CHANGELOG 后
+git tag v0.1.37
+git push origin v0.1.37
+# Actions「Release」工作流会自动编译四端并上传
 
-# 已测过、只打包
-powershell -ExecutionPolicy Bypass -File scripts\package_release.ps1 -SkipTests
+# 给已有 tag 补构建（例如只补了 Windows 时）：
+gh workflow run release.yml -f tag=v0.1.36
 ```
 
-**GitHub Release（示例）：**
+**本机 Windows 便携包**（仅当前机器，不替代 CI）：
 
 ```powershell
-# 需已安装 GitHub CLI (gh) 并登录
-gh release create v0.1.36 dist/OhMyCopy-0.1.36.zip --title "v0.1.36" --notes-file CHANGELOG.md
+powershell -ExecutionPolicy Bypass -File scripts\package_release.ps1
+# → dist/OhMyCopy-<版本>.zip
 ```
 
 **为什么默认看不到 dist 里的 exe？**
