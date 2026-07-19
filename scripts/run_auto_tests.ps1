@@ -9,9 +9,9 @@
 #   $env:OHMYCOPY_E2E_LARGE_MB = "20"
 #   powershell -ExecutionPolicy Bypass -File scripts\run_auto_tests.ps1
 #
-#   $env:OHMYCOPY_VM_HOST = "192.168.75.201"
-#   $env:OHMYCOPY_VM_USER = "NRC"
-#   $env:OHMYCOPY_VM_PASSWORD = "..."   # do not commit
+#   $env:OHMYCOPY_VM_HOST = "192.168.1.100"   # test machine IP
+#   $env:OHMYCOPY_VM_USER = "your-user"
+#   $env:OHMYCOPY_VM_PASSWORD = "..."         # do not commit
 #   powershell -ExecutionPolicy Bypass -File scripts\run_auto_tests.ps1 -VmSmoke
 #
 # Exit 0 = all selected tests passed.

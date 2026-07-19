@@ -8,9 +8,11 @@
 - egui 原生 UI（扁平 + 毛玻璃风格）+ 系统托盘  
 - 目标：可靠、体积小、低内存  
 
-规格与 as-built 说明见 [docs/开发文档.md](docs/开发文档.md)（**设计 v0.2 + 实现对齐 v0.1.34**）。
+规格与 as-built 说明见 [docs/开发文档.md](docs/开发文档.md)（**设计 v0.2 + 实现对齐当前版本**）。
 
-## 功能状态（v0.1.35）
+仓库：<https://github.com/PriceNing/OhMyCopy>
+
+## 功能状态（v0.1.36）
 
 | 能力 | 状态 |
 |------|------|
@@ -113,7 +115,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run_auto_tests.ps1
 | 1. 开发构建 | `cargo build --release` | **`target/release/ohmycopy.exe`**（编译输出，不是 dist） |
 | 2. 测试 | `scripts\run_auto_tests.ps1`（可选配 VM） | 无发布物 |
 | 3. 打包 | `scripts\package_release.ps1` | **`dist/OhMyCopy-<版本>/`** + **`dist/OhMyCopy-<版本>.zip`** + `dist/ohmycopy.exe` |
-| 4. 分发 | 把 zip 或文件夹拷给用户 | 用户解压后运行 `ohmycopy.exe` |
+| 4. 分发 | 把 zip 拷给用户，或挂到 GitHub Releases | 用户解压后运行 `ohmycopy.exe` |
 
 ```powershell
 # 一键：测一遍 + release 构建 + 写入 dist/
@@ -123,11 +125,18 @@ powershell -ExecutionPolicy Bypass -File scripts\package_release.ps1
 powershell -ExecutionPolicy Bypass -File scripts\package_release.ps1 -SkipTests
 ```
 
+**GitHub Release（示例）：**
+
+```powershell
+# 需已安装 GitHub CLI (gh) 并登录
+gh release create v0.1.36 dist/OhMyCopy-0.1.36.zip --title "v0.1.36" --notes-file CHANGELOG.md
+```
+
 **为什么默认看不到 dist 里的 exe？**
 
 1. `cargo build` **只会**写到 `target/release/`，**不会**自动拷到 `dist/`。  
 2. 清理垃圾时 `dist/` 被清空，只保留占位文件 `dist/.gitkeep`。  
-3. `.gitignore` 忽略 `dist/*`（除 `.gitkeep`），避免把运行配置、inbox、exe 提交进 Git/SVN。  
+3. `.gitignore` 忽略 `dist/*`（除 `.gitkeep`），避免把运行配置、inbox、exe 提交进 Git。  
 4. 需要发布目录时，请跑上面的 **`package_release.ps1`**。
 
 图标：`assets/ohmycopy.ico` 编进 exe；窗口/托盘用 `assets/icon.png`、`tray.png`。
@@ -138,4 +147,4 @@ Rust · tokio · egui/eframe · Argon2id · ChaCha20-Poly1305 · BLAKE3 · postc
 
 ## 许可
 
-MIT
+[MIT](LICENSE)

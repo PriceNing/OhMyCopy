@@ -31,9 +31,9 @@ powershell -ExecutionPolicy Bypass -File scripts\run_auto_tests.ps1 -Large
 设置好三个环境变量后，**同一脚本会自动接上 VM smoke**（不必再记第二个命令）：
 
 ```powershell
-$env:OHMYCOPY_VM_HOST = "192.168.75.201"
-$env:OHMYCOPY_VM_USER = "NRC"
-$env:OHMYCOPY_VM_PASSWORD = "你的密码"   # 勿提交仓库
+$env:OHMYCOPY_VM_HOST = "192.168.1.100"   # 你的测试机 IP
+$env:OHMYCOPY_VM_USER = "your-user"
+$env:OHMYCOPY_VM_PASSWORD = "your-password"   # 仅环境变量；勿写入仓库
 # 可选：$env:OHMYCOPY_E2E_LARGE_MB = "8"
 powershell -ExecutionPolicy Bypass -File scripts\run_auto_tests.ps1
 # 或强制要求 VM：
