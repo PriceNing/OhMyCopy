@@ -253,7 +253,7 @@ fn glass_panel(ui: &mut egui::Ui, t: &GlassTheme, add_contents: impl FnOnce(&mut
         rect,
         egui::CornerRadius::same(10),
         t.card,
-        egui::Stroke::new(1.0, t.border),
+        egui::Stroke::new(1.0_f32, t.border),
         egui::StrokeKind::Inside,
     );
 
@@ -323,7 +323,7 @@ fn history_row(
         card,
         egui::CornerRadius::same(8),
         t.card.gamma_multiply(0.55),
-        egui::Stroke::new(1.0, t.border),
+        egui::Stroke::new(1.0_f32, t.border),
         egui::StrokeKind::Inside,
     );
 

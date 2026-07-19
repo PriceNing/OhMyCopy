@@ -34,8 +34,8 @@ pub fn apply(ctx: &egui::Context, t: &GlassTheme) {
     visuals.widgets.inactive.bg_fill = t.card;
     visuals.widgets.hovered.bg_fill = Color32::from_rgba_unmultiplied(60, 68, 90, 220);
     visuals.widgets.active.bg_fill = Color32::from_rgba_unmultiplied(70, 90, 130, 230);
-    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, t.text);
-    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, t.text);
+    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, t.text);
+    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, t.text);
     visuals.selection.bg_fill = t.accent.gamma_multiply(0.35);
     visuals.window_corner_radius = CornerRadius::same(12);
     visuals.menu_corner_radius = CornerRadius::same(8);
