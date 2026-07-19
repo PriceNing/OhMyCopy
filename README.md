@@ -98,6 +98,19 @@ ohmycopy.exe --headless
 
 Windows 上 headless 若需读写**桌面剪贴板**，请在已登录的交互会话启动（例如计划任务 `/IT`），避免 Session 0。
 
+**Linux headless 与剪贴板：**
+
+- 网络同步/中继**不依赖**本机剪贴板；无 DISPLAY 时仍可在多台设备间转发。
+- 若本机也要「粘贴」，需要图形会话的剪贴板，例如：
+  ```bash
+  # 在已登录桌面用户下运行，并指向本机显示：
+  export DISPLAY=:0
+  # 可选：export XAUTHORITY=$HOME/.Xauthority
+  sudo apt install -y xclip   # 或 Wayland: wl-clipboard
+  ./ohmycopy --headless
+  ```
+- 若 OS 剪贴板仍失败，收到的文本/图片会写入 `~/.ohmycopy/last_clip/`（及历史/inbox），不会静默丢弃。
+
 ### 配置与数据目录
 
 配置与收件箱统一在用户主目录下的 **`.ohmycopy`**（Windows / Linux 相同约定）：

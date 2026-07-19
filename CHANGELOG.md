@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.38 — 2026-07-19
+
+### 修复
+
+- Linux headless：OS 剪贴板不可用时（X11 unreachable）重试/重建 arboard，并回退 `wl-copy`/`xclip`/`xsel`
+- 剪贴板写入失败时仍写入历史，并把文本/图片落到 `~/.ohmycopy/last_clip/`
+- headless 启动探测剪贴板并打印可操作提示（DISPLAY / xclip）
+- arboard 启用 `wayland-data-control`
+
 ## 0.1.37 — 2026-07-19
 
 ### 修复

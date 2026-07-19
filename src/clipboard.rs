@@ -278,30 +278,21 @@ pub fn png_to_rgba(png: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
 }
 
 fn clipboard_thread(rx: Receiver<ClipRequest>, suppress_fp: Arc<Mutex<Option<String>>>) {
-    let mut clipboard = match Clipboard::new() {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!(error = %e, "clipboard open failed on worker thread");
-            while let Ok(req) = rx.recv() {
-                match req {
-                    ClipRequest::Get { reply } => {
-                        let _ = reply.send(Err(anyhow::anyhow!("clipboard unavailable: {e}")));
-                    }
-                    ClipRequest::SetText { reply, .. }
-                    | ClipRequest::SetFiles { reply, .. }
-                    | ClipRequest::SetImage { reply, .. } => {
-                        let _ = reply.send(Err(anyhow::anyhow!("clipboard unavailable: {e}")));
-                    }
-                }
-            }
-            return;
-        }
-    };
+    // Keep Option so we can re-open after X11 disconnect / unreachable DISPLAY.
+    let mut clipboard: Option<Clipboard> = open_clipboard_handle();
+    if clipboard.is_none() {
+        tracing::warn!(
+            "OS clipboard not available at start (common in Linux headless without \
+             a live DISPLAY/Wayland). Will retry and try CLI tools (wl-copy/xclip)."
+        );
+        #[cfg(target_os = "linux")]
+        log_linux_clipboard_hint();
+    }
 
     while let Ok(req) = rx.recv() {
         match req {
             ClipRequest::Get { reply } => {
-                let result = read_clip_content(&mut clipboard);
+                let result = read_clip_content_resilient(&mut clipboard);
                 let _ = reply.send(result);
             }
             ClipRequest::SetText {
@@ -313,19 +304,12 @@ fn clipboard_thread(rx: Receiver<ClipRequest>, suppress_fp: Arc<Mutex<Option<Str
                     *suppress_fp.lock() =
                         Some(ClipContent::Text(text.clone()).fingerprint());
                 }
-                let mut result = Ok(());
-                for attempt in 0..5 {
-                    match clipboard.set_text(text.clone()) {
-                        Ok(()) => {
-                            result = Ok(());
-                            break;
-                        }
-                        Err(e) => {
-                            result = Err(anyhow::anyhow!("{e}"));
-                            if attempt + 1 < 5 {
-                                thread::sleep(Duration::from_millis(20 * (attempt + 1) as u64));
-                            }
-                        }
+                let result = set_text_resilient(&mut clipboard, &text);
+                if let Err(e) = &result {
+                    tracing::warn!(error = %e, "set clipboard text failed");
+                    // Always keep a copy under data dir so headless nodes do not lose payload.
+                    if let Err(fe) = persist_last_clip_text(&text) {
+                        tracing::debug!(error = %fe, "persist last_clip text");
                     }
                 }
                 if result.is_err() && from_sync {
@@ -365,24 +349,11 @@ fn clipboard_thread(rx: Receiver<ClipRequest>, suppress_fp: Arc<Mutex<Option<Str
                         .fingerprint(),
                     );
                 }
-                let mut result = Ok(());
-                for attempt in 0..5 {
-                    let img = ImageData {
-                        width: width as usize,
-                        height: height as usize,
-                        bytes: Cow::Borrowed(rgba.as_slice()),
-                    };
-                    match clipboard.set_image(img) {
-                        Ok(()) => {
-                            result = Ok(());
-                            break;
-                        }
-                        Err(e) => {
-                            result = Err(anyhow::anyhow!("{e}"));
-                            if attempt + 1 < 5 {
-                                thread::sleep(Duration::from_millis(20 * (attempt + 1) as u64));
-                            }
-                        }
+                let result = set_image_resilient(&mut clipboard, width, height, &rgba);
+                if let Err(e) = &result {
+                    tracing::warn!(error = %e, "set clipboard image failed");
+                    if let Err(fe) = persist_last_clip_image(width, height, &rgba) {
+                        tracing::debug!(error = %fe, "persist last_clip image");
                     }
                 }
                 if result.is_err() && from_sync {
@@ -392,6 +363,315 @@ fn clipboard_thread(rx: Receiver<ClipRequest>, suppress_fp: Arc<Mutex<Option<Str
             }
         }
     }
+}
+
+fn open_clipboard_handle() -> Option<Clipboard> {
+    match Clipboard::new() {
+        Ok(c) => Some(c),
+        Err(e) => {
+            tracing::debug!(error = %e, "Clipboard::new failed");
+            None
+        }
+    }
+}
+
+fn ensure_clipboard(clipboard: &mut Option<Clipboard>) -> Result<&mut Clipboard> {
+    if clipboard.is_none() {
+        *clipboard = open_clipboard_handle();
+    }
+    clipboard
+        .as_mut()
+        .ok_or_else(|| anyhow::anyhow!("clipboard unavailable: no OS clipboard backend"))
+}
+
+fn set_text_resilient(clipboard: &mut Option<Clipboard>, text: &str) -> Result<()> {
+    let mut last_err = None;
+    for attempt in 0..4 {
+        if let Ok(cb) = ensure_clipboard(clipboard) {
+            match cb.set_text(text) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    last_err = Some(anyhow::anyhow!("{e}"));
+                    // Drop handle so next attempt re-opens (stale X11 socket).
+                    *clipboard = None;
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(40 * (attempt + 1) as u64));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(()) = linux_cli_set_text(text) {
+            tracing::info!("clipboard text set via CLI fallback (wl-copy/xclip/xsel)");
+            return Ok(());
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| {
+        anyhow::anyhow!(
+            "clipboard unavailable: X11/Wayland unreachable. On Linux headless, run inside \
+             the desktop user session (DISPLAY=:0) or install xclip/wl-clipboard."
+        )
+    }))
+}
+
+fn set_image_resilient(
+    clipboard: &mut Option<Clipboard>,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+) -> Result<()> {
+    let mut last_err = None;
+    for attempt in 0..4 {
+        if let Ok(cb) = ensure_clipboard(clipboard) {
+            let img = ImageData {
+                width: width as usize,
+                height: height as usize,
+                bytes: Cow::Borrowed(rgba),
+            };
+            match cb.set_image(img) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    last_err = Some(anyhow::anyhow!("{e}"));
+                    *clipboard = None;
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(40 * (attempt + 1) as u64));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(png) = rgba_to_png(width, height, rgba) {
+            if linux_cli_set_png(&png).is_ok() {
+                tracing::info!("clipboard image set via CLI fallback");
+                return Ok(());
+            }
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("clipboard image unavailable")))
+}
+
+fn read_clip_content_resilient(clipboard: &mut Option<Clipboard>) -> Result<ClipContent> {
+    // Prefer OS clipboard; on Linux also try CLI if arboard is down.
+    if let Ok(cb) = ensure_clipboard(clipboard) {
+        match read_clip_content(cb) {
+            Ok(ClipContent::Empty) => {}
+            Ok(c) => return Ok(c),
+            Err(e) => {
+                tracing::trace!(error = %e, "read_clip_content failed");
+                *clipboard = None;
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(t) = linux_cli_get_text() {
+            if !t.is_empty() {
+                return Ok(ClipContent::Text(t));
+            }
+        }
+    }
+
+    Ok(ClipContent::Empty)
+}
+
+/// Probe whether we can talk to an OS clipboard (used by headless banner).
+pub fn probe_clipboard_available() -> Result<()> {
+    let cb = open_clipboard_handle();
+    if cb.is_some() {
+        return Ok(());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // CLI tools may still work when arboard cannot open X11.
+        if linux_cli_get_text().is_ok() || which_cmd("wl-copy") || which_cmd("xclip") {
+            return Ok(());
+        }
+        log_linux_clipboard_hint();
+        bail!(
+            "no clipboard backend (X11/Wayland unreachable and no wl-copy/xclip). \
+             Headless can still relay between peers; local paste needs a session display."
+        );
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        bail!("clipboard unavailable");
+    }
+}
+
+fn persist_last_clip_text(text: &str) -> Result<()> {
+    let dir = crate::config::Config::data_dir()?.join("last_clip");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("text.txt");
+    std::fs::write(&path, text)?;
+    tracing::info!(path = %path.display(), "saved received text to last_clip (OS clipboard failed)");
+    Ok(())
+}
+
+fn persist_last_clip_image(width: u32, height: u32, rgba: &[u8]) -> Result<()> {
+    let dir = crate::config::Config::data_dir()?.join("last_clip");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("image.png");
+    let png = rgba_to_png(width, height, rgba)?;
+    std::fs::write(&path, png)?;
+    tracing::info!(path = %path.display(), "saved received image to last_clip (OS clipboard failed)");
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn log_linux_clipboard_hint() {
+    tracing::warn!(
+        "Linux clipboard tip: for headless under a desktop user, try:\n  \
+         export DISPLAY=:0\n  \
+         # if needed: export XAUTHORITY=$HOME/.Xauthority\n  \
+         # or install: sudo apt install xclip  (or wl-clipboard on Wayland)\n  \
+         # pure servers without GUI cannot provide a system clipboard; peers still sync via network"
+    );
+}
+
+#[cfg(target_os = "linux")]
+fn which_cmd(name: &str) -> bool {
+    std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("command -v {name} >/dev/null 2>&1"))
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_cli_set_text(text: &str) -> Result<()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    // Prefer Wayland when advertised.
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() && which_cmd("wl-copy") {
+        let mut child = Command::new("wl-copy")
+            .stdin(Stdio::piped())
+            .spawn()
+            .context("spawn wl-copy")?;
+        child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("wl-copy stdin"))?
+            .write_all(text.as_bytes())?;
+        let st = child.wait()?;
+        if st.success() {
+            return Ok(());
+        }
+    }
+
+    if which_cmd("xclip") {
+        let mut child = Command::new("xclip")
+            .args(["-selection", "clipboard"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .context("spawn xclip")?;
+        child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("xclip stdin"))?
+            .write_all(text.as_bytes())?;
+        let st = child.wait()?;
+        if st.success() {
+            return Ok(());
+        }
+    }
+
+    if which_cmd("xsel") {
+        let mut child = Command::new("xsel")
+            .args(["--clipboard", "--input"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .context("spawn xsel")?;
+        child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("xsel stdin"))?
+            .write_all(text.as_bytes())?;
+        let st = child.wait()?;
+        if st.success() {
+            return Ok(());
+        }
+    }
+
+    bail!("no working wl-copy/xclip/xsel")
+}
+
+#[cfg(target_os = "linux")]
+fn linux_cli_get_text() -> Result<String> {
+    use std::process::Command;
+
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() && which_cmd("wl-paste") {
+        let out = Command::new("wl-paste")
+            .arg("--no-newline")
+            .output()
+            .context("wl-paste")?;
+        if out.status.success() {
+            return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
+        }
+    }
+    if which_cmd("xclip") {
+        let out = Command::new("xclip")
+            .args(["-selection", "clipboard", "-o"])
+            .output()
+            .context("xclip -o")?;
+        if out.status.success() {
+            return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
+        }
+    }
+    if which_cmd("xsel") {
+        let out = Command::new("xsel")
+            .args(["--clipboard", "--output"])
+            .output()
+            .context("xsel -o")?;
+        if out.status.success() {
+            return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
+        }
+    }
+    bail!("cli get text failed")
+}
+
+#[cfg(target_os = "linux")]
+fn linux_cli_set_png(png: &[u8]) -> Result<()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() && which_cmd("wl-copy") {
+        let mut child = Command::new("wl-copy")
+            .args(["--type", "image/png"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .context("spawn wl-copy image")?;
+        child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("wl-copy stdin"))?
+            .write_all(png)?;
+        if child.wait()?.success() {
+            return Ok(());
+        }
+    }
+    if which_cmd("xclip") {
+        let mut child = Command::new("xclip")
+            .args(["-selection", "clipboard", "-t", "image/png"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .context("spawn xclip image")?;
+        child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("xclip stdin"))?
+            .write_all(png)?;
+        if child.wait()?.success() {
+            return Ok(());
+        }
+    }
+    bail!("no CLI image clipboard")
 }
 
 fn read_clip_content(clipboard: &mut Clipboard) -> Result<ClipContent> {

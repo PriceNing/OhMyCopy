@@ -284,9 +284,13 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                     tracing::warn!("remote text is not utf-8");
                                     continue;
                                 };
+                                // Always record history even if OS clipboard is down
+                                // (common on Linux headless without a live DISPLAY).
                                 if let Err(e) = clip.set_text_from_sync(&text) {
-                                    tracing::warn!(error = %e, "write clipboard text");
-                                    continue;
+                                    tracing::warn!(
+                                        error = %e,
+                                        "write clipboard text (content still stored in history / last_clip)"
+                                    );
                                 }
                                 let preview = {
                                     let h = hist.lock();
@@ -439,12 +443,16 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                         continue;
                                     }
                                 };
-                                if let Err(e) = clip.set_image_from_sync(img_w, img_h, rgba) {
-                                    tracing::warn!(error = %e, "set clipboard image");
-                                    ui_s.lock().toast =
-                                        Some(ohmycopy::i18n::t_args("toast.image_clip_fail", &[("error", &e.to_string())]));
-                                    continue;
-                                }
+                                let clip_ok = match clip.set_image_from_sync(img_w, img_h, rgba) {
+                                    Ok(()) => true,
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            error = %e,
+                                            "set clipboard image (content still stored in inbox / last_clip)"
+                                        );
+                                        false
+                                    }
+                                };
                                 let fname = ev
                                     .file_name
                                     .clone()
@@ -482,7 +490,17 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                 };
                                 let mut u = ui_s.lock();
                                 u.history = preview;
-                                u.toast = Some(ohmycopy::i18n::t_args("toast.image_received", &[("dim", &dim)]));
+                                u.toast = Some(if clip_ok {
+                                    ohmycopy::i18n::t_args("toast.image_received", &[("dim", &dim)])
+                                } else {
+                                    ohmycopy::i18n::t_args(
+                                        "toast.image_clip_fail",
+                                        &[(
+                                            "error",
+                                            "OS clipboard unavailable; saved to inbox/last_clip",
+                                        )],
+                                    )
+                                });
                             }
                         }
                     }
@@ -1164,6 +1182,24 @@ fn run_headless(
             &[("version", env!("CARGO_PKG_VERSION"))],
         )
     );
+    // Warn early when OS clipboard cannot be opened (typical Linux SSH/service).
+    match ohmycopy::clipboard::probe_clipboard_available() {
+        Ok(()) => {
+            println!("  clipboard : OK (OS / CLI backend)");
+        }
+        Err(e) => {
+            println!("  clipboard : UNAVAILABLE — {e}");
+            println!(
+                "  tip       : network sync/relay still works; local paste needs a desktop"
+            );
+            println!(
+                "              session. Try: export DISPLAY=:0  and/or  apt install xclip"
+            );
+            println!(
+                "              Received text is also saved under ~/.ohmycopy/last_clip/"
+            );
+        }
+    }
     println!("----------------------------------------------------");
     println!(
         " {}",
