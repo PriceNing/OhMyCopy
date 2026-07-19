@@ -47,6 +47,28 @@ pub struct AppTray {
 
 impl AppTray {
     pub fn new(sync_enabled: bool, true_quit: Arc<AtomicBool>) -> Result<Self> {
+        // GTK Menu construction can panic (not just Err). Catch so GUI still runs.
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Self::new_inner(sync_enabled, true_quit)
+        })) {
+            Ok(r) => r,
+            Err(_) => anyhow::bail!(
+                "system tray panicked during creation (GTK/display). Continuing without tray."
+            ),
+        }
+    }
+
+    fn new_inner(sync_enabled: bool, true_quit: Arc<AtomicBool>) -> Result<Self> {
+        // Linux tray-icon/muda uses GTK. Creating Menu/TrayIcon without gtk::init
+        // panics with "GTK has not been initialized" (seen on Debian/KDE).
+        #[cfg(target_os = "linux")]
+        {
+            ensure_linux_display()?;
+            if let Err(e) = gtk::init() {
+                anyhow::bail!("gtk::init failed (system tray needs a graphical session): {e}");
+            }
+        }
+
         let shared = Arc::new(TrayShared {
             pending: Mutex::new(Vec::new()),
             egui_ctx: Mutex::new(None),
@@ -224,6 +246,33 @@ fn wake_egui(shared: &TrayShared) {
         ctx.request_repaint();
     }
 }
+
+/// Linux tray needs a real graphical session (X11 or Wayland).
+#[cfg(target_os = "linux")]
+fn ensure_linux_display() -> Result<()> {
+    let has_x11 = std::env::var_os("DISPLAY").filter(|v| !v.is_empty()).is_some();
+    let has_wayland = std::env::var_os("WAYLAND_DISPLAY")
+        .filter(|v| !v.is_empty())
+        .is_some();
+    if !has_x11 && !has_wayland {
+        anyhow::bail!("no DISPLAY/WAYLAND_DISPLAY; system tray skipped");
+    }
+    Ok(())
+}
+
+/// Pump a few GTK iterations so StatusNotifier/AppIndicator can register.
+/// Safe no-op when GTK is not used (non-Linux).
+#[cfg(target_os = "linux")]
+pub fn poll_gtk_events() {
+    if gtk::is_initialized() {
+        while gtk::events_pending() {
+            let _ = gtk::main_iteration_do(false);
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn poll_gtk_events() {}
 
 fn make_tray_icon() -> Result<Icon> {
     let size = 32u32;

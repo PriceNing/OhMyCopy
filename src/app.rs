@@ -1721,6 +1721,9 @@ impl eframe::App for AppShell {
         self.inner.ui.cmd_toggle_sync = false;
         self.inner.ui.cmd_set_language = None;
 
+        // Linux tray-icon/muda needs occasional GTK main-loop pumps.
+        tray::poll_gtk_events();
+
         let sync_before = self.inner.ui.sync_enabled;
         self.inner.update(ctx, frame);
 

@@ -1,6 +1,6 @@
 [package]
 name = "ohmycopy"
-version = "0.1.36"
+version = "0.1.37"
 edition = "2021"
 description = "Lightweight LAN clipboard sync for Windows, Linux, and macOS"
 license = "MIT"
@@ -52,7 +52,8 @@ lto = true
 codegen-units = 1
 strip = true
 opt-level = "s"
-panic = "abort"
+# unwind: allow catching tray/GTK panics on Linux so the main window still starts.
+panic = "unwind"
 
 [dev-dependencies]
 tempfile = "3"
@@ -64,3 +65,7 @@ winreg = "0.52"
 # Windows .exe icon / version resource
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
+
+# Linux system tray (tray-icon/muda) requires gtk::init before any Menu/TrayIcon.
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"

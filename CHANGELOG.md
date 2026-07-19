@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.37 — 2026-07-19
+
+### 修复
+
+- Linux：系统托盘创建前调用 `gtk::init`，避免 `GTK has not been initialized` 整进程 panic
+- Linux：托盘创建失败时软降级（无托盘仍可开主窗口）；release 改用 `panic = unwind` 以捕获托盘 panic
+- Linux：主循环中泵送少量 GTK 事件，改善托盘菜单响应
+- 文档：说明 Debian 需 `libxdo3` 等依赖；发布包可捆绑 libxdo
+
 ## 0.1.36 — 2026-07-18
 
 ### 功能
