@@ -3,10 +3,13 @@
 //! - Windows: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` value `OhMyCopy`
 //! - Linux: `~/.config/autostart/ohmycopy.desktop`
 //! - macOS: LaunchAgents plist (best-effort)
+//!
+//! Windows note: never write `\\?\` extended paths into the Run key — Task Manager
+//! "Open file location" and some login launches fail with that form.
 
 use anyhow::{Context, Result};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[cfg(windows)]
 const RUN_VALUE_NAME: &str = "OhMyCopy";
@@ -14,12 +17,22 @@ const RUN_VALUE_NAME: &str = "OhMyCopy";
 const DESKTOP_FILE_NAME: &str = "ohmycopy.desktop";
 
 /// Enable or disable OS autostart to match `config.auto_start`.
-/// No-ops when already in the desired state (avoids needless work / side effects).
+/// When enabling, refreshes the path if the registered entry is stale / unusable.
 pub fn apply(enabled: bool) -> Result<()> {
     if enabled {
         let exe = current_exe_path()?;
-        if windows_already_enabled_for(&exe) {
-            return Ok(());
+        if !exe.is_file() {
+            anyhow::bail!(
+                "current executable path is not a file: {}",
+                exe.display()
+            );
+        }
+        #[cfg(windows)]
+        {
+            // Skip rewrite only when Run points at this exe, path is normal, file exists.
+            if windows_run_is_healthy_for(&exe) {
+                return Ok(());
+            }
         }
         enable()
     } else {
@@ -30,25 +43,29 @@ pub fn apply(enabled: bool) -> Result<()> {
     }
 }
 
-/// True if autostart already points at this exe (Windows); other OS: any registration.
-fn windows_already_enabled_for(exe: &std::path::Path) -> bool {
-    #[cfg(windows)]
-    {
-        return windows_run_value()
-            .map(|v| paths_match_run_value(&v, exe))
-            .unwrap_or(false);
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = exe;
-        is_registered()
-    }
-}
-
-/// Path of the running executable (canonical when possible).
+/// Path of the running executable, suitable for OS autostart registration.
+/// On Windows this **never** returns a `\\?\` extended path (breaks Run key UX).
 pub fn current_exe_path() -> Result<PathBuf> {
     let p = std::env::current_exe().context("current_exe")?;
-    Ok(fs::canonicalize(&p).unwrap_or(p))
+    let can = fs::canonicalize(&p).unwrap_or(p);
+    Ok(strip_extended_path(can))
+}
+
+/// Remove Windows `\\?\` / `\\?\UNC\` prefixes for shell/Run compatibility.
+pub fn strip_extended_path(path: PathBuf) -> PathBuf {
+    let s = path.to_string_lossy();
+    #[cfg(windows)]
+    {
+        let s = s.as_ref();
+        if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{rest}"));
+        }
+        if let Some(rest) = s.strip_prefix(r"\\?\") {
+            return PathBuf::from(rest);
+        }
+    }
+    let _ = s;
+    path
 }
 
 fn enable() -> Result<()> {
@@ -129,29 +146,72 @@ fn windows_run_value() -> Option<String> {
     key.get_value::<String, _>(RUN_VALUE_NAME).ok()
 }
 
+/// Normalize a Run-key command / path for comparison.
 #[cfg(windows)]
-fn paths_match_run_value(value: &str, exe: &std::path::Path) -> bool {
-    let v = value.trim().trim_matches('"');
-    let e = exe.to_string_lossy();
-    // Compare case-insensitive; tolerate \\?\ prefix differences.
-    let norm = |s: &str| {
-        s.trim()
-            .trim_start_matches(r"\\?\")
-            .replace('/', "\\")
-            .to_ascii_lowercase()
-    };
-    norm(v) == norm(&e)
+fn normalize_run_path(s: &str) -> String {
+    let mut t = s.trim().trim_matches('"').to_string();
+    // Drop optional trailing args if ever present: "C:\path\app.exe" --foo
+    if let Some(rest) = t.strip_prefix('"') {
+        if let Some(end) = rest.find('"') {
+            t = rest[..end].to_string();
+        }
+    }
+    if let Some(rest) = t.strip_prefix(r"\\?\UNC\") {
+        t = format!(r"\\{rest}");
+    } else if let Some(rest) = t.strip_prefix(r"\\?\") {
+        t = rest.to_string();
+    }
+    t.replace('/', "\\").to_ascii_lowercase()
 }
 
 #[cfg(windows)]
-fn windows_set_run(exe: &std::path::Path, enable: bool) -> Result<()> {
+fn paths_match_run_value(value: &str, exe: &Path) -> bool {
+    let e = strip_extended_path(exe.to_path_buf());
+    normalize_run_path(value) == normalize_run_path(&e.to_string_lossy())
+}
+
+/// Registered value exists, points at this exe, path is not `\\?\`, and file exists.
+#[cfg(windows)]
+fn windows_run_is_healthy_for(exe: &Path) -> bool {
+    let Some(val) = windows_run_value() else {
+        return false;
+    };
+    // Extended prefix breaks Task Manager "Open file location" and can break Run.
+    if val.contains(r"\\?\") {
+        tracing::info!("autostart Run value uses extended path; will rewrite");
+        return false;
+    }
+    let raw = val.trim().trim_matches('"');
+    let p = PathBuf::from(raw);
+    if !p.is_file() {
+        tracing::warn!(
+            registered = %raw,
+            "autostart Run target missing; will rewrite"
+        );
+        return false;
+    }
+    paths_match_run_value(&val, exe)
+}
+
+#[cfg(windows)]
+fn windows_set_run(exe: &Path, enable: bool) -> Result<()> {
     let key = run_key()?;
     if enable {
-        let exe_s = exe.to_string_lossy();
+        // Shell Run expects a normal Win32 path, quoted, no \\?\ prefix.
+        let clean = strip_extended_path(exe.to_path_buf());
+        if !clean.is_file() {
+            anyhow::bail!(
+                "cannot register autostart; exe not found: {}",
+                clean.display()
+            );
+        }
+        let exe_s = clean.to_string_lossy();
+        // Prefer start-minimized when config says so? Keep simple: just the exe;
+        // app reads config.json for start_minimized_to_tray on launch.
         let cmd = format!("\"{exe_s}\"");
         key.set_value(RUN_VALUE_NAME, &cmd)
             .context("set HKCU Run value")?;
-        tracing::info!(path = %exe.display(), "autostart enabled (HKCU Run API)");
+        tracing::info!(path = %clean.display(), "autostart enabled (HKCU Run API)");
     } else {
         // Not found is fine.
         match key.delete_value(RUN_VALUE_NAME) {
@@ -174,6 +234,17 @@ fn windows_set_run(exe: &std::path::Path, enable: bool) -> Result<()> {
 #[cfg(windows)]
 fn windows_is_registered() -> bool {
     windows_run_value().is_some()
+}
+
+/// Read current Run command for diagnostics / UI.
+#[cfg(windows)]
+pub fn windows_registered_command() -> Option<String> {
+    windows_run_value()
+}
+
+#[cfg(not(windows))]
+pub fn windows_registered_command() -> Option<String> {
+    None
 }
 
 // --- Linux: XDG autostart ---
@@ -261,5 +332,28 @@ mod tests {
     fn current_exe_resolves() {
         let p = current_exe_path().unwrap();
         assert!(p.is_absolute() || p.exists());
+        let s = p.to_string_lossy();
+        assert!(
+            !s.contains(r"\\?\"),
+            "autostart path must not use extended prefix: {s}"
+        );
+    }
+
+    #[test]
+    fn strip_extended_prefix() {
+        let p = strip_extended_path(PathBuf::from(r"\\?\D:\apps\ohmycopy.exe"));
+        assert_eq!(p, PathBuf::from(r"D:\apps\ohmycopy.exe"));
+        let p = strip_extended_path(PathBuf::from(r"\\?\UNC\server\share\a.exe"));
+        assert_eq!(p, PathBuf::from(r"\\server\share\a.exe"));
+        let p = strip_extended_path(PathBuf::from(r"D:\normal\ohmycopy.exe"));
+        assert_eq!(p, PathBuf::from(r"D:\normal\ohmycopy.exe"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn normalize_run_compares_quoted_and_extended() {
+        let a = normalize_run_path(r#""\\?\D:\Apps\ohmycopy.exe""#);
+        let b = normalize_run_path(r"D:\Apps\ohmycopy.exe");
+        assert_eq!(a, b);
     }
 }
