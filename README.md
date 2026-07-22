@@ -12,14 +12,14 @@
 
 仓库：<https://github.com/PriceNing/OhMyCopy>
 
-## 功能状态（v0.1.36）
+## 功能状态（v0.1.41）
 
 | 能力 | 状态 |
 |------|------|
 | 文本剪贴板同步 | ✅ |
 | 图片 / 截图（PNG + CF_DIB/DIBV5 等） | ✅ |
-| 文件同步（CF_HDROP / 整包） | ✅ |
-| 文件夹同步（打包 zip，MIME `application/x-ohmycopy-dir-zip`） | ✅ |
+| 文件同步（CF_HDROP，支持多选及文件夹混合） | ✅ |
+| 文件夹同步（打包 zip；多项目合包） | ✅ |
 | 密码鉴权 + 会话加密 | ✅ |
 | 每对单 TCP + device_id 去重会话 | ✅ |
 | event_id 去重 + 同步写入不外发 + 星型中继 | ✅ |

@@ -40,6 +40,7 @@ pub const ZIP_MAX_UNCOMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
 
 /// MIME for a directory packed as zip (receiver will extract to a folder).
 pub const MIME_DIR_ZIP: &str = "application/x-ohmycopy-dir-zip";
+pub const MIME_MULTI_PATHS_ZIP: &str = "application/x-ohmycopy-multi-paths-zip";
 
 pub fn inbox_dir() -> Result<PathBuf> {
     let d = crate::config::Config::data_dir()?.join("inbox");
@@ -101,7 +102,11 @@ pub fn store_file(_event_prefix: &str, file_name: &str, payload: &[u8]) -> Resul
 /// Unpack a dir-zip under a new timestamp folder:
 /// `inbox/20260718_153045_123/原文件夹名/...`
 /// Returns path to the **inner** folder (clean name for clipboard paste).
-pub fn store_folder_zip(_event_prefix: &str, folder_name: &str, zip_bytes: &[u8]) -> Result<PathBuf> {
+pub fn store_folder_zip(
+    _event_prefix: &str,
+    folder_name: &str,
+    zip_bytes: &[u8],
+) -> Result<PathBuf> {
     let receipt = new_receipt_dir()?;
     let root = receipt.join(sanitize_name(folder_name));
     fs::create_dir_all(&root)?;
@@ -111,6 +116,109 @@ pub fn store_folder_zip(_event_prefix: &str, folder_name: &str, zip_bytes: &[u8]
     }
     cleanup_inbox(INBOX_MAX_TOTAL_BYTES, INBOX_MAX_ENTRIES, INBOX_MAX_AGE)?;
     Ok(root)
+}
+
+pub fn store_multi_paths_zip(_event_prefix: &str, zip_bytes: &[u8]) -> Result<Vec<PathBuf>> {
+    let receipt = new_receipt_dir()?;
+    if let Err(e) = extract_zip_to_dir(zip_bytes, &receipt) {
+        let _ = fs::remove_dir_all(&receipt);
+        return Err(e);
+    }
+    let mut paths = fs::read_dir(&receipt)
+        .with_context(|| format!("read receipt {}", receipt.display()))?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .collect::<Vec<_>>();
+    paths.sort();
+    if paths.is_empty() {
+        let _ = fs::remove_dir_all(&receipt);
+        bail!("multi-path archive is empty");
+    }
+    cleanup_inbox(INBOX_MAX_TOTAL_BYTES, INBOX_MAX_ENTRIES, INBOX_MAX_AGE)?;
+    Ok(paths)
+}
+
+pub fn pack_paths(paths: &[PathBuf], max_bytes: u64) -> Result<(String, Vec<u8>, &'static str)> {
+    if paths.len() < 2 {
+        bail!("multi-path archive requires at least two paths");
+    }
+    let mut buf = Vec::new();
+    {
+        let cursor = std::io::Cursor::new(&mut buf);
+        let mut zip = ZipWriter::new(cursor);
+        let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        let mut uncompressed = 0u64;
+        for path in paths {
+            let meta = fs::metadata(path).with_context(|| format!("stat {}", path.display()))?;
+            let name = path
+                .file_name()
+                .map(|name| sanitize_name(&name.to_string_lossy()))
+                .unwrap_or_else(|| "item".into());
+            if meta.is_file() {
+                uncompressed = uncompressed.saturating_add(meta.len());
+                zip.start_file(name, opts).context("zip start_file")?;
+                copy_file_to_zip(&mut zip, path)?;
+            } else if meta.is_dir() {
+                zip.add_directory(format!("{name}/"), opts)
+                    .context("zip add_directory")?;
+                for entry in WalkDir::new(path)
+                    .into_iter()
+                    .filter_map(|entry| entry.ok())
+                {
+                    let entry_path = entry.path();
+                    if entry_path == path {
+                        continue;
+                    }
+                    let rel = entry_path
+                        .strip_prefix(path)
+                        .unwrap_or(entry_path)
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    let zip_name = format!("{name}/{rel}");
+                    if entry.file_type().is_dir() {
+                        zip.add_directory(format!("{zip_name}/"), opts)
+                            .context("zip add_directory")?;
+                    } else if entry.file_type().is_file() {
+                        uncompressed = uncompressed
+                            .saturating_add(entry.metadata().map(|meta| meta.len()).unwrap_or(0));
+                        zip.start_file(zip_name, opts).context("zip start_file")?;
+                        copy_file_to_zip(&mut zip, entry_path)?;
+                    }
+                    if uncompressed > max_bytes.saturating_mul(4) {
+                        bail!("selected files exceed the acceptable size for limit {max_bytes}");
+                    }
+                }
+            } else {
+                bail!("unsupported path type: {}", path.display());
+            }
+            if uncompressed > max_bytes.saturating_mul(4) {
+                bail!("selected files exceed the acceptable size for limit {max_bytes}");
+            }
+        }
+        zip.finish().context("zip finish")?;
+    }
+    if buf.len() as u64 > max_bytes {
+        bail!(
+            "multi-path archive size {} exceeds limit {max_bytes}",
+            buf.len()
+        );
+    }
+    Ok((
+        format!("{} items.zip", paths.len()),
+        buf,
+        MIME_MULTI_PATHS_ZIP,
+    ))
+}
+
+fn copy_file_to_zip(zip: &mut ZipWriter<std::io::Cursor<&mut Vec<u8>>>, path: &Path) -> Result<()> {
+    let mut file = fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let mut chunk = [0u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut chunk)?;
+        if read == 0 {
+            return Ok(());
+        }
+        zip.write_all(&chunk[..read])?;
+    }
 }
 
 /// Pack a file or directory for network transfer.
@@ -151,9 +259,8 @@ fn zip_directory(dir: &Path, max_bytes: u64) -> Result<Vec<u8>> {
     let mut uncompressed: u64 = 0;
     for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
         if entry.file_type().is_file() {
-            uncompressed = uncompressed.saturating_add(
-                entry.metadata().map(|m| m.len()).unwrap_or(0),
-            );
+            uncompressed =
+                uncompressed.saturating_add(entry.metadata().map(|m| m.len()).unwrap_or(0));
             // Deflate usually shrinks, but allow up to max uncompressed as soft gate.
             if uncompressed > max_bytes.saturating_mul(4) {
                 anyhow::bail!(
@@ -188,8 +295,7 @@ fn zip_directory(dir: &Path, max_bytes: u64) -> Result<Vec<u8>> {
                 } else {
                     format!("{rel}/")
                 };
-                zip.add_directory(name, opts)
-                    .context("zip add_directory")?;
+                zip.add_directory(name, opts).context("zip add_directory")?;
             } else if entry.file_type().is_file() {
                 zip.start_file(rel, opts).context("zip start_file")?;
                 let mut f = fs::File::open(path)?;
@@ -223,9 +329,7 @@ fn extract_zip_to_dir(zip_bytes: &[u8], dest: &Path) -> Result<()> {
     let mut archive = ZipArchive::new(cursor).context("open zip")?;
     let n_entries = archive.len();
     if n_entries > ZIP_MAX_ENTRIES {
-        bail!(
-            "zip 条目过多（{n_entries} > {ZIP_MAX_ENTRIES}），已拒绝解压"
-        );
+        bail!("zip 条目过多（{n_entries} > {ZIP_MAX_ENTRIES}），已拒绝解压");
     }
 
     let mut declared_total: u64 = 0;
@@ -483,6 +587,28 @@ mod tests {
         assert_eq!(
             fs::read_to_string(out.join("sub").join("b.txt")).unwrap(),
             "world"
+        );
+    }
+
+    #[test]
+    fn multi_path_zip_roundtrip_preserves_files_and_folders() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("one.txt");
+        let folder = dir.path().join("two");
+        fs::write(&file, b"one").unwrap();
+        fs::create_dir_all(folder.join("nested")).unwrap();
+        fs::write(folder.join("nested").join("three.txt"), b"three").unwrap();
+
+        let (_name, bytes, mime) = pack_paths(&[file, folder], 10 * 1024 * 1024).unwrap();
+        assert_eq!(mime, MIME_MULTI_PATHS_ZIP);
+
+        let out = dir.path().join("out");
+        fs::create_dir_all(&out).unwrap();
+        extract_zip_to_dir(&bytes, &out).unwrap();
+        assert_eq!(fs::read_to_string(out.join("one.txt")).unwrap(), "one");
+        assert_eq!(
+            fs::read_to_string(out.join("two").join("nested").join("three.txt")).unwrap(),
+            "three"
         );
     }
 }

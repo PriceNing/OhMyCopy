@@ -2,7 +2,7 @@ use ohmycopy::clients::{ClientSource, ClientsFile};
 use ohmycopy::clipboard::{
     png_to_rgba, rgba_to_png, spawn_clipboard_watcher, ClipContent, ClipboardService,
 };
-use ohmycopy::inbox::{self, MIME_DIR_ZIP};
+use ohmycopy::inbox::{self, MIME_DIR_ZIP, MIME_MULTI_PATHS_ZIP};
 use ohmycopy::protocol::ContentKind;
 use ohmycopy::config::Config;
 use ohmycopy::engine::{EngineCore, SharedEngine};
@@ -307,6 +307,30 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                 u.toast = Some(ohmycopy::i18n::t("toast.text_received"));
                             }
                             ContentKind::File => {
+                                if ev.mime == MIME_MULTI_PATHS_ZIP {
+                                    let paths = match inbox::store_multi_paths_zip(&ev.event_id.to_string()[..8], &ev.payload) {
+                                        Ok(paths) => paths,
+                                        Err(e) => {
+                                            tracing::warn!(error = %e, "extract multi-path zip");
+                                            ui_s.lock().toast = Some(ohmycopy::i18n::t_args("toast.file_save_fail", &[("error", &e.to_string())]));
+                                            continue;
+                                        }
+                                    };
+                                    if let Err(e) = clip.set_files_from_sync(&paths) {
+                                        tracing::warn!(error = %e, "set clipboard multi-path files");
+                                        ui_s.lock().toast = Some(ohmycopy::i18n::t_args("toast.file_clip_fail", &[("error", &e.to_string())]));
+                                    }
+                                    let count = paths.len().to_string();
+                                    let preview = {
+                                        let h = hist.lock();
+                                        let _ = h.insert_file(ev.event_id, ev.source_id, &format!("{count} items"), &paths[0].parent().unwrap_or(&paths[0]).to_string_lossy(), ev.payload.len() as u64, ev.created_at);
+                                        h.list("", 100).unwrap_or_default()
+                                    };
+                                    let mut u = ui_s.lock();
+                                    u.history = preview;
+                                    u.toast = Some(ohmycopy::i18n::t_args("toast.files_received", &[("count", &count)]));
+                                    continue;
+                                }
                                 let name = ev
                                     .file_name
                                     .clone()
@@ -784,6 +808,33 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                     }
                     ClipContent::Files(paths) => {
                         let max = eng.lock().max_payload_bytes;
+                        if paths.len() > 1 {
+                            let (wire_name, bytes, mime) = match inbox::pack_paths(&paths, max) {
+                                Ok(payload) => payload,
+                                Err(e) => {
+                                    ui_c.lock().toast = Some(ohmycopy::i18n::t_args("toast.file_read_fail", &[("error", &e.to_string())]));
+                                    return;
+                                }
+                            };
+                            let size = bytes.len() as u64;
+                            let count = paths.len().to_string();
+                            let ev = {
+                                let mut core = eng.lock();
+                                core.on_local_file(&wire_name, bytes, mime)
+                            };
+                            if let Some(ev) = ev {
+                                let preview = {
+                                    let h = hist.lock();
+                                    let _ = h.insert_file(ev.event_id, local_id, &format!("{count} items"), &paths[0].parent().unwrap_or(&paths[0]).to_string_lossy(), size, ev.created_at);
+                                    h.list("", 100).unwrap_or_default()
+                                };
+                                let mut u = ui_c.lock();
+                                u.history = preview;
+                                u.toast = Some(ohmycopy::i18n::t_args("toast.files_synced", &[("count", &count)]));
+                                hub_c.broadcast_clipboard(ev);
+                            }
+                            return;
+                        }
                         for path in paths {
                             let is_dir = path.is_dir();
                             let (wire_name, bytes, mime) = match inbox::pack_path(&path, max) {
