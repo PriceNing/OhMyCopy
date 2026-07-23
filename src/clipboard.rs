@@ -85,6 +85,31 @@ pub struct ClipboardService {
     suppress_fp: Arc<Mutex<Option<String>>>,
 }
 
+/// The Win32 clipboard is scoped to an interactive desktop.  Clipboard writes
+/// must therefore run in the same process that owns the user's desktop, rather
+/// than in an arbitrary worker spawned by a GUI-subsystem executable.
+#[cfg(windows)]
+fn attach_to_input_desktop() {
+    const GENERIC_ALL: u32 = 0x1000_0000;
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn OpenInputDesktop(flags: u32, inherit: i32, access: u32) -> *mut core::ffi::c_void;
+        fn SetThreadDesktop(desktop: *mut core::ffi::c_void) -> i32;
+    }
+
+    unsafe {
+        let desktop = OpenInputDesktop(0, 0, GENERIC_ALL);
+        if !desktop.is_null() && SetThreadDesktop(desktop) == 0 {
+            tracing::debug!("SetThreadDesktop(OpenInputDesktop) failed");
+        }
+        // Do not close `desktop`: the successful SetThreadDesktop call makes it
+        // the thread's desktop and the handle must stay valid for that thread.
+    }
+}
+
+#[cfg(not(windows))]
+fn attach_to_input_desktop() {}
+
 impl ClipboardService {
     pub fn new() -> Result<Self> {
         let (tx, rx) = mpsc::sync_channel::<ClipRequest>(32);
@@ -157,6 +182,13 @@ impl ClipboardService {
     pub fn set_files_from_sync(&self, paths: &[PathBuf]) -> Result<()> {
         self.mark_suppress_fp(ClipContent::Files(paths.to_vec()).fingerprint());
         self.set_files_inner(paths, true)
+    }
+
+    /// Put a file list on the local clipboard without suppressing the watcher.
+    /// This is used by local callers (including the clipboard probe) that want
+    /// the normal outbound-sync path to observe the CF_HDROP change.
+    pub fn set_files_local(&self, paths: &[PathBuf]) -> Result<()> {
+        self.set_files_inner(paths, false)
     }
 
     fn set_files_inner(&self, paths: &[PathBuf], from_sync: bool) -> Result<()> {
@@ -272,12 +304,15 @@ pub fn rgba_to_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>> {
 
 /// Decode PNG → (width, height, RGBA8).
 pub fn png_to_rgba(png: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
-    let img = image::load_from_memory(png).context("decode png")?.to_rgba8();
+    let img = image::load_from_memory(png)
+        .context("decode png")?
+        .to_rgba8();
     let (w, h) = img.dimensions();
     Ok((w, h, img.into_raw()))
 }
 
 fn clipboard_thread(rx: Receiver<ClipRequest>, suppress_fp: Arc<Mutex<Option<String>>>) {
+    attach_to_input_desktop();
     // Keep Option so we can re-open after X11 disconnect / unreachable DISPLAY.
     let mut clipboard: Option<Clipboard> = open_clipboard_handle();
     if clipboard.is_none() {
@@ -301,8 +336,7 @@ fn clipboard_thread(rx: Receiver<ClipRequest>, suppress_fp: Arc<Mutex<Option<Str
                 reply,
             } => {
                 if from_sync {
-                    *suppress_fp.lock() =
-                        Some(ClipContent::Text(text.clone()).fingerprint());
+                    *suppress_fp.lock() = Some(ClipContent::Text(text.clone()).fingerprint());
                 }
                 let result = set_text_resilient(&mut clipboard, &text);
                 if let Err(e) = &result {
@@ -323,8 +357,7 @@ fn clipboard_thread(rx: Receiver<ClipRequest>, suppress_fp: Arc<Mutex<Option<Str
                 reply,
             } => {
                 if from_sync {
-                    *suppress_fp.lock() =
-                        Some(ClipContent::Files(paths.clone()).fingerprint());
+                    *suppress_fp.lock() = Some(ClipContent::Files(paths.clone()).fingerprint());
                 }
                 let result = set_files_resilient(&mut clipboard, &paths);
                 if result.is_err() && from_sync {
@@ -684,23 +717,11 @@ fn read_clip_content(clipboard: &mut Clipboard) -> Result<ClipContent> {
         .filter(|p| p.exists())
         .collect::<Vec<_>>();
 
-    // WeChat / some tools: single image as CF_HDROP temp path → treat as Image.
-    if files.len() == 1 && looks_like_image_path(&files[0]) {
-        if let Ok((w, h, rgba)) = load_image_file_rgba(&files[0]) {
-            tracing::debug!(path = %files[0].display(), w, h, "clipboard: image via file path");
-            return Ok(ClipContent::Image {
-                width: w,
-                height: h,
-                rgba,
-            });
-        }
-    }
-
-    // Real multi-file / folder / non-image files from file-list MIME only.
-    if !files.is_empty()
-        && (files.len() > 1
-            || files.iter().any(|p| p.is_dir() || !looks_like_image_path(p)))
-    {
+    // A file-list format (CF_HDROP on Windows) is authoritative.  In particular,
+    // a single .png/.jpg copied from Explorer must remain a file so it can be
+    // pasted into a file manager.  Bitmap-only copies (screenshots and image
+    // editors) do not provide a file list and are handled below.
+    if !files.is_empty() {
         return Ok(ClipContent::Files(files));
     }
 
@@ -714,69 +735,11 @@ fn read_clip_content(clipboard: &mut Clipboard) -> Result<ClipContent> {
         }
     }
 
-    // Single image path we could not decode → still sync as file (only if file-list).
-    if files.len() == 1 {
-        return Ok(ClipContent::Files(files));
-    }
-
     match clipboard.get_text() {
         Ok(t) if !t.is_empty() => Ok(ClipContent::Text(t)),
         Ok(_) => Ok(ClipContent::Empty),
         Err(_) => Ok(ClipContent::Empty),
     }
-}
-
-fn looks_like_image_path(p: &std::path::Path) -> bool {
-    if p.is_dir() {
-        return false;
-    }
-    let ext = p
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .unwrap_or_default();
-    matches!(
-        ext.as_str(),
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "dib" | "tif" | "tiff"
-    ) || {
-        // WeChat sometimes uses no/odd extension — sniff magic bytes.
-        if let Ok(mut f) = std::fs::File::open(p) {
-            use std::io::Read;
-            let mut magic = [0u8; 12];
-            if f.read(&mut magic).unwrap_or(0) >= 4 {
-                return is_image_magic(&magic);
-            }
-        }
-        false
-    }
-}
-
-fn is_image_magic(b: &[u8]) -> bool {
-    if b.len() >= 8 && b[0..8] == [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A] {
-        return true;
-    }
-    if b.len() >= 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF {
-        return true;
-    }
-    if b.len() >= 6 && (&b[0..6] == b"GIF87a" || &b[0..6] == b"GIF89a") {
-        return true;
-    }
-    if b.len() >= 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP" {
-        return true;
-    }
-    if b.len() >= 2 && b[0] == b'B' && b[1] == b'M' {
-        return true;
-    }
-    false
-}
-
-fn load_image_file_rgba(path: &std::path::Path) -> Result<(u32, u32, Vec<u8>)> {
-    let img = image::open(path).context("open image file")?.to_rgba8();
-    let (w, h) = img.dimensions();
-    if w == 0 || h == 0 {
-        bail!("empty image");
-    }
-    Ok((w, h, img.into_raw()))
 }
 
 /// Try arboard + native CF_DIB / PNG clipboard formats.
@@ -816,10 +779,7 @@ pub fn spawn_clipboard_watcher(
     thread::Builder::new()
         .name("ohmycopy-clip-watch".into())
         .spawn(move || {
-            let mut last_fp = service
-                .get()
-                .map(|c| c.fingerprint())
-                .unwrap_or_default();
+            let mut last_fp = service.get().map(|c| c.fingerprint()).unwrap_or_default();
             while !shutdown.load(Ordering::SeqCst) {
                 thread::sleep(Duration::from_millis(400));
                 let current = match service.get() {
@@ -831,10 +791,12 @@ pub fn spawn_clipboard_watcher(
                     continue;
                 }
                 last_fp = fp.clone();
+                crate::audit::record(format!("clipboard_change fingerprint={fp}"));
                 // Only suppress the exact content we wrote from a remote sync.
                 // A broad "next change" flag used to swallow a real user copy
                 // that landed before the watcher polled the sync write.
                 if service.take_suppress_for(&fp) {
+                    crate::audit::record(format!("clipboard_change suppressed fingerprint={fp}"));
                     continue;
                 }
                 if matches!(current, ClipContent::Empty) {
@@ -1085,9 +1047,7 @@ fn linux_cli_set_uri_list(paths: &[PathBuf]) -> Result<()> {
         let abs = if p.is_absolute() {
             p.clone()
         } else {
-            std::env::current_dir()
-                .unwrap_or_default()
-                .join(p)
+            std::env::current_dir().unwrap_or_default().join(p)
         };
         // Simple URI: file:///path (percent-encode spaces).
         let s = abs.to_string_lossy().replace('\\', "/");
@@ -1252,6 +1212,25 @@ mod win_hdrop {
         if paths.is_empty() {
             bail!("empty file list");
         }
+        let mut last_error = None;
+        // Clipboard ownership can remain briefly busy after a bitmap write
+        // (notably after images copied from Explorer).  A one-shot CF_HDROP
+        // write would then fail and leave the preceding bitmap on the desktop
+        // clipboard.  Retry the entire native transaction before falling back
+        // to arboard.
+        for attempt in 0..12 {
+            match set_files_once(paths) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    last_error = Some(e);
+                    std::thread::sleep(std::time::Duration::from_millis(50 * (attempt + 1)));
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("set CF_HDROP failed")))
+    }
+
+    fn set_files_once(paths: &[PathBuf]) -> Result<()> {
         // Build DROPFILES + double-NUL UTF-16 path list.
         let mut path_bytes: Vec<u16> = Vec::new();
         for p in paths {
@@ -1295,7 +1274,11 @@ mod win_hdrop {
                 GlobalFree(hmem);
                 bail!("OpenClipboard failed");
             }
-            EmptyClipboard();
+            if EmptyClipboard() == 0 {
+                CloseClipboard();
+                GlobalFree(hmem);
+                bail!("EmptyClipboard failed");
+            }
             if SetClipboardData(CF_HDROP, hmem).is_null() {
                 CloseClipboard();
                 GlobalFree(hmem);

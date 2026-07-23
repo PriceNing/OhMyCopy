@@ -137,13 +137,17 @@ async fn pair_ab(
     let (hub_b, shut_b, mut ev_b) = spawn_hub(id_b, "E2E-B", password, max_payload, addr_b);
     tokio::time::sleep(Duration::from_millis(100)).await;
     hub_a.trial_connect(id_b, addr_b);
-    let _ = wait_event(&mut ev_a, Duration::from_secs(10), |e| {
-        matches!(e, NetEvent::PeerSessionReady { device_id, .. } if *device_id == id_b)
-    })
+    let _ = wait_event(
+        &mut ev_a,
+        Duration::from_secs(10),
+        |e| matches!(e, NetEvent::PeerSessionReady { device_id, .. } if *device_id == id_b),
+    )
     .await;
-    let _ = wait_event(&mut ev_b, Duration::from_secs(10), |e| {
-        matches!(e, NetEvent::PeerSessionReady { device_id, .. } if *device_id == id_a)
-    })
+    let _ = wait_event(
+        &mut ev_b,
+        Duration::from_secs(10),
+        |e| matches!(e, NetEvent::PeerSessionReady { device_id, .. } if *device_id == id_a),
+    )
     .await;
     // Drain pairing noise
     while ev_a.try_recv().is_ok() {}
@@ -175,7 +179,10 @@ async fn hub_pair_text_image_and_file() {
         match got {
             NetEvent::ClipboardFromRemote(ev) => {
                 assert_eq!(ev.kind, ContentKind::Text);
-                assert_eq!(String::from_utf8(ev.payload).unwrap(), "auto-test hello 中文");
+                assert_eq!(
+                    String::from_utf8(ev.payload).unwrap(),
+                    "auto-test hello 中文"
+                );
             }
             _ => unreachable!(),
         }
@@ -183,16 +190,20 @@ async fn hub_pair_text_image_and_file() {
 
     // Image
     {
-        let rgba = vec![255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255];
+        let rgba = vec![
+            255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255,
+        ];
         let png = ohmycopy::clipboard::rgba_to_png(2, 2, &rgba).unwrap();
         let ev = eng(id_a, max_payload)
             .lock()
             .on_local_image(png.clone(), Some("e2e.png".into()))
             .unwrap();
         hub_a.broadcast_clipboard(ev);
-        let got = wait_event(&mut ev_b, Duration::from_secs(15), |e| {
-            matches!(e, NetEvent::ClipboardFromRemote(ev) if ev.kind == ContentKind::Image)
-        })
+        let got = wait_event(
+            &mut ev_b,
+            Duration::from_secs(15),
+            |e| matches!(e, NetEvent::ClipboardFromRemote(ev) if ev.kind == ContentKind::Image),
+        )
         .await;
         match got {
             NetEvent::ClipboardFromRemote(ev) => assert_eq!(ev.payload, png),
@@ -212,9 +223,11 @@ async fn hub_pair_text_image_and_file() {
             .on_local_file("e2e-bin.dat", payload.clone(), "application/octet-stream")
             .unwrap();
         hub_a.broadcast_clipboard(ev);
-        let got = wait_event(&mut ev_b, Duration::from_secs(30), |e| {
-            matches!(e, NetEvent::ClipboardFromRemote(ev) if ev.kind == ContentKind::File)
-        })
+        let got = wait_event(
+            &mut ev_b,
+            Duration::from_secs(30),
+            |e| matches!(e, NetEvent::ClipboardFromRemote(ev) if ev.kind == ContentKind::File),
+        )
         .await;
         match got {
             NetEvent::ClipboardFromRemote(ev) => {
@@ -383,8 +396,8 @@ async fn hub_large_folder_zip_sync() {
     match got {
         NetEvent::ClipboardFromRemote(ev) => {
             assert_eq!(ev.payload, bytes);
-            let dest =
-                inbox::store_folder_zip("lg", "big-folder", &ev.payload).expect("extract large folder");
+            let dest = inbox::store_folder_zip("lg", "big-folder", &ev.payload)
+                .expect("extract large folder");
             assert_eq!(
                 std::fs::read_to_string(dest.join("readme.txt")).unwrap(),
                 "large-folder-marker"
@@ -501,8 +514,13 @@ async fn hub_unpair_notifies_peer() {
     hub_a.remove_client(Some(id_b), addr_b);
 
     let got = wait_event_optional(&mut ev_b, Duration::from_secs(5), |e| {
-        matches!(e, NetEvent::PeerUnpaired { from_remote: true, .. })
-            || matches!(e, NetEvent::Toast(s) if s.contains("解除") || s.contains("断开"))
+        matches!(
+            e,
+            NetEvent::PeerUnpaired {
+                from_remote: true,
+                ..
+            }
+        ) || matches!(e, NetEvent::Toast(s) if s.contains("解除") || s.contains("断开"))
     })
     .await;
     // PeerUnpaired or disconnect toast — either means unpair path ran.

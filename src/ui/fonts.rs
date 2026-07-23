@@ -15,10 +15,10 @@ fn candidate_paths() -> Vec<PathBuf> {
         let fonts = windir.join("Fonts");
         // Prefer static TTF first — best compatibility with ab_glyph/egui.
         for name in [
-            "simhei.ttf",      // 黑体
-            "simkai.ttf",      // 楷体
-            "simfang.ttf",     // 仿宋
-            "msyh.ttc",        // 微软雅黑 (TTC, index 0)
+            "simhei.ttf",  // 黑体
+            "simkai.ttf",  // 楷体
+            "simfang.ttf", // 仿宋
+            "msyh.ttc",    // 微软雅黑 (TTC, index 0)
             "msyhl.ttc",
             "simsun.ttc",
             "NotoSansSC-Regular.otf",
@@ -115,7 +115,9 @@ pub fn install_cjk_fonts(ctx: &egui::Context) {
     };
 
     let mut fonts = FontDefinitions::default();
-    fonts.font_data.insert(family_name.clone(), font_data.into());
+    fonts
+        .font_data
+        .insert(family_name.clone(), font_data.into());
 
     // Put CJK first so Han glyphs resolve; Latin still falls through to default fonts.
     if let Some(prop) = fonts.families.get_mut(&FontFamily::Proportional) {

@@ -31,6 +31,9 @@ PROBE_CANDIDATES = [
     ROOT / "target" / "release" / "clip_probe.exe",
 ]
 REMOTE_DIR = r"C:\OhMyCopyE2E"
+# The smoke passes this directory via OHMYCOPY_DATA_DIR, avoiding dependence on
+# the profile environment inherited by Task Scheduler.
+DATA_DIR_NAME = ".ohmycopy"
 PORT = 3721
 
 
@@ -155,7 +158,12 @@ def main() -> int:
         return 2
 
     print("=== build ===")
-    subprocess.check_call(["cargo", "build", "--release", "--examples"], cwd=ROOT)
+    # Build both the application that will be deployed and the clipboard probe.
+    # `--examples` alone leaves a stale target/release/ohmycopy.exe in place,
+    # which makes a VM smoke appear to test a source revision it never ran.
+    subprocess.check_call(
+        ["cargo", "build", "--release", "--bins", "--examples"], cwd=ROOT
+    )
     probe = find_probe()
     if not EXE.exists():
         print("missing ohmycopy.exe", file=sys.stderr)
@@ -250,21 +258,56 @@ def main() -> int:
         ],
     }
 
-    local_work = ROOT / "target" / "e2e_local"
-    local_work.mkdir(parents=True, exist_ok=True)
-    # clean old history for clean asserts
-    for name in ("history.db", "history.db-wal", "history.db-shm"):
-        p = local_work / name
-        if p.exists():
-            p.unlink()
-    (local_work / "config.json").write_text(json.dumps(local_config, indent=2), encoding="utf-8")
-    (local_work / "clients.json").write_text(
-        json.dumps(local_clients, indent=2), encoding="utf-8"
-    )
     import shutil
 
-    shutil.copy2(EXE, local_work / "ohmycopy.exe")
-    subprocess.run(["taskkill", "/F", "/IM", "ohmycopy.exe"], capture_output=True)
+    local_work = ROOT / "target" / "e2e_local"
+    local_data = local_work / DATA_DIR_NAME
+    # Match all historical release executable names too.  Otherwise a manually
+    # started `ohmycopy-windows-x64.exe` can keep port 3721, and the smoke
+    # talks to a stale build rather than the staged binary.
+    subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            "Get-Process ohmycopy* -EA SilentlyContinue | Stop-Process -Force",
+        ],
+        capture_output=True,
+    )
+    # taskkill returns before Windows necessarily releases SQLite handles.  Wait
+    # for the previous local smoke instance to exit before resetting its data.
+    for _ in range(20):
+        still_running = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", "@(Get-Process ohmycopy* -EA SilentlyContinue).Count"],
+            capture_output=True,
+            text=True,
+        )
+        if still_running.stdout.strip() == "0":
+            break
+        time.sleep(0.25)
+    # The old executable handle can linger briefly after the process disappears.
+    # Retrying makes repeated smoke runs reliable on Windows.
+    for attempt in range(20):
+        try:
+            shutil.copy2(EXE, local_work / "ohmycopy.exe")
+            break
+        except PermissionError:
+            if attempt == 19:
+                raise
+            time.sleep(0.25)
+    local_data.mkdir(parents=True, exist_ok=True)
+    host_audit = local_work / "host-audit.log"
+    if host_audit.exists():
+        host_audit.unlink()
+    # clean old history for clean asserts
+    for name in ("history.db", "history.db-wal", "history.db-shm"):
+        p = local_data / name
+        if p.exists():
+            p.unlink()
+    (local_data / "config.json").write_text(json.dumps(local_config, indent=2), encoding="utf-8")
+    (local_data / "clients.json").write_text(
+        json.dumps(local_clients, indent=2), encoding="utf-8"
+    )
 
     print("=== SSH connect ===")
     c = ssh_connect(host, user, password)
@@ -277,18 +320,18 @@ def main() -> int:
             rf"""
 $ErrorActionPreference='SilentlyContinue'
 New-Item -ItemType Directory -Force -Path '{REMOTE_DIR}' | Out-Null
-Get-Process ohmycopy | Stop-Process -Force
+Get-Process ohmycopy* | Stop-Process -Force
 Start-Sleep -Seconds 1
-Remove-Item -Recurse -Force (Join-Path '{REMOTE_DIR}' 'inbox') -EA SilentlyContinue
-Remove-Item -Force (Join-Path '{REMOTE_DIR}' 'history.db*') -EA SilentlyContinue
+Remove-Item -Recurse -Force (Join-Path '{REMOTE_DIR}' '{DATA_DIR_NAME}') -EA SilentlyContinue
+New-Item -ItemType Directory -Force -Path (Join-Path '{REMOTE_DIR}' '{DATA_DIR_NAME}') | Out-Null
 """,
         )
         sftp_put(c, EXE, REMOTE_DIR + r"\ohmycopy.exe")
         sftp = c.open_sftp()
         try:
-            with sftp.file(REMOTE_DIR + r"\config.json", "w") as f:
+            with sftp.file(REMOTE_DIR + rf"\{DATA_DIR_NAME}\config.json", "w") as f:
                 f.write(json.dumps(vm_config, indent=2))
-            with sftp.file(REMOTE_DIR + r"\clients.json", "w") as f:
+            with sftp.file(REMOTE_DIR + rf"\{DATA_DIR_NAME}\clients.json", "w") as f:
                 f.write(json.dumps(vm_clients, indent=2))
         finally:
             sftp.close()
@@ -305,10 +348,23 @@ netsh advfirewall firewall delete rule name='OhMyCopyE2E-Prog' | Out-Null
 netsh advfirewall firewall add rule name='OhMyCopyE2E' dir=in action=allow protocol=TCP localport=3721 profile=any enable=yes | Out-Null
 netsh advfirewall firewall add rule name='OhMyCopyE2E-UDP' dir=in action=allow protocol=UDP localport=3721 profile=any enable=yes | Out-Null
 netsh advfirewall firewall add rule name='OhMyCopyE2E-Prog' dir=in action=allow program='C:\OhMyCopyE2E\ohmycopy.exe' profile=any enable=yes | Out-Null
-Get-Process ohmycopy -EA SilentlyContinue | Stop-Process -Force
+Get-Process ohmycopy* -EA SilentlyContinue | Stop-Process -Force
 Start-Sleep 1
 schtasks /Delete /TN OhMyCopyE2E /F 2>$null | Out-Null
-schtasks /Create /TN OhMyCopyE2E /TR "C:\OhMyCopyE2E\ohmycopy.exe --headless" /SC ONCE /ST 00:00 /RL HIGHEST /F /RU "{user}" /RP "{rp}" /IT | Out-Null
+$bat = @'
+@echo off
+set "OHMYCOPY_DATA_DIR=C:\OhMyCopyE2E\.ohmycopy"
+set "OHMYCOPY_SYNC_AUDIT_PATH=C:\OhMyCopyE2E\vm-audit.log"
+set "OHMYCOPY_SYNC_AUDIT=1"
+set > C:\OhMyCopyE2E\ohmycopy-env.log
+set "RUST_LOG=debug"
+C:\OhMyCopyE2E\ohmycopy.exe --headless >> C:\OhMyCopyE2E\ohmycopy.log 2>&1
+'@
+Set-Content -Path '{REMOTE_DIR}\run_ohmycopy.bat' -Value $bat -Encoding ASCII
+Remove-Item -Force '{REMOTE_DIR}\ohmycopy.log' -EA SilentlyContinue
+Remove-Item -Force '{REMOTE_DIR}\vm-audit.log' -EA SilentlyContinue
+Remove-Item -Force (Join-Path '{REMOTE_DIR}' '{DATA_DIR_NAME}\sync-audit.log') -EA SilentlyContinue
+schtasks /Create /TN OhMyCopyE2E /TR "C:\OhMyCopyE2E\run_ohmycopy.bat" /SC ONCE /ST 00:00 /RL HIGHEST /F /RU "{user}" /RP "{rp}" /IT | Out-Null
 schtasks /Run /TN OhMyCopyE2E | Out-Null
 Start-Sleep -Seconds 5
 $p = Get-Process ohmycopy -EA SilentlyContinue | Select-Object -First 1
@@ -334,6 +390,13 @@ netstat -an | findstr 3721
         local_proc = subprocess.Popen(
             [str(local_work / "ohmycopy.exe"), "--headless"],
             cwd=str(local_work),
+            env={
+                **os.environ,
+                "OHMYCOPY_DATA_DIR": str(local_data),
+                "OHMYCOPY_SYNC_AUDIT_PATH": str(host_audit),
+                "OHMYCOPY_SYNC_AUDIT": "1",
+                "RUST_LOG": "debug",
+            },
             stdout=open(local_work / "stdout.log", "w"),
             stderr=open(local_work / "stderr.log", "w"),
         )
@@ -344,6 +407,23 @@ netstat -an | findstr 3721
                 break
         print("waiting 12s for auto_connect handshake…")
         time.sleep(12)
+        # The endpoint may be connected via either inbound or outbound TCP;
+        # confirm an authenticated application session from the audit trail,
+        # not merely that port 3721 accepts a socket.
+        session_ready = False
+        for i in range(20):
+            tmp = Path(tempfile.gettempdir()) / "vm_sync_audit_ready.log"
+            if sftp_get(c, REMOTE_DIR + r"\vm-audit.log", tmp):
+                try:
+                    session_ready = "net_session_ready" in tmp.read_text(errors="replace")
+                except OSError:
+                    pass
+            if session_ready:
+                print(f"authenticated session ready at {i}s")
+                break
+            time.sleep(1)
+        if not session_ready:
+            print("WARN authenticated session not observed in audit log")
 
         # ---- text local -> VM (verify VM history.db) ----
         print("=== TEST text local->VM ===")
@@ -352,7 +432,7 @@ netstat -an | findstr 3721
         for _ in range(15):
             time.sleep(1)
             tmp = Path(tempfile.gettempdir()) / "vm_history.db"
-            if sftp_get(c, REMOTE_DIR + r"\history.db", tmp):
+            if sftp_get(c, REMOTE_DIR + rf"\{DATA_DIR_NAME}\history.db", tmp):
                 if history_has(tmp, token):
                     ok = True
                     break
@@ -370,7 +450,7 @@ netstat -an | findstr 3721
                     print(p.read_text(errors="replace")[-1500:])
 
         # Settle after FWD so remote sync-write + suppress fingerprint clear cleanly.
-        time.sleep(2)
+        time.sleep(5)
 
         # ---- text VM -> local: set clipboard in console session via bat + schtasks /IT
         # (schtasks /TR "exe arg1 arg2" often drops args; use a .bat wrapper)
@@ -410,7 +490,7 @@ netstat -an | findstr ':3721'
             print(probe_log.strip()[-1200:])
             for _ in range(18):
                 time.sleep(1)
-                if history_has(local_work / "history.db", token2):
+                if history_has(local_data / "history.db", token2):
                     ok = True
                     break
                 try:
@@ -432,7 +512,7 @@ netstat -an | findstr ':3721'
             results.append("FAIL text VM->local")
             # Did VM watcher even see the copy? (local history insert on VM)
             tmp = Path(tempfile.gettempdir()) / "vm_history_rev.db"
-            if sftp_get(c, REMOTE_DIR + r"\history.db", tmp):
+            if sftp_get(c, REMOTE_DIR + rf"\{DATA_DIR_NAME}\history.db", tmp):
                 print(
                     "  VM history has reverse token:",
                     history_has(tmp, token2),
@@ -455,7 +535,7 @@ netstat -an | findstr ':3721'
             cnt = ps(
                 c,
                 rf"""
-$inbox = Join-Path '{REMOTE_DIR}' 'inbox'
+$inbox = Join-Path (Join-Path '{REMOTE_DIR}' '{DATA_DIR_NAME}') 'inbox'
 if (-not (Test-Path $inbox)) {{ 0; return }}
 @(Get-ChildItem $inbox -Recurse -File -Filter '*.png' -EA SilentlyContinue).Count
 """,
@@ -469,7 +549,7 @@ if (-not (Test-Path $inbox)) {{ 0; return }}
                 ok = True
                 break
             tmp = Path(tempfile.gettempdir()) / "vm_history2.db"
-            if sftp_get(c, REMOTE_DIR + r"\history.db", tmp):
+            if sftp_get(c, REMOTE_DIR + rf"\{DATA_DIR_NAME}\history.db", tmp):
                 if history_has(tmp, "[图片]") or history_has(tmp, "image"):
                     ok = True
                     break
@@ -479,6 +559,57 @@ if (-not (Test-Path $inbox)) {{ 0; return }}
         else:
             print("FAIL image local->VM")
             results.append("FAIL image local->VM")
+
+        # Let the remote bitmap clipboard write and watcher suppression settle
+        # before replacing it with the same PNG as an HDROP file.
+        time.sleep(2)
+
+        # ---- image *file* via CF_HDROP ----
+        # A .png copied from Explorer must arrive as a file-list clipboard entry,
+        # rather than being converted into bitmap clipboard data.  Run the probe
+        # in the VM's interactive session so Get-Clipboard sees the same desktop
+        # clipboard that users paste from.
+        print("=== TEST image file local->VM (OS HDROP) ===")
+        image_file_name = f"image-file-{uuid.uuid4().hex[:8]}.png"
+        image_file = local_work / image_file_name
+        image_file.write_bytes(png.read_bytes())
+        subprocess.check_call([str(probe), "set-file", str(image_file)])
+        ok = False
+        for i in range(20):
+            time.sleep(1)
+            # The final user-visible contract is CF_HDROP on the VM desktop.
+            # Probe it directly instead of inferring clipboard state from the
+            # inbox location (which may be redirected by a Windows user profile).
+            file_kind = ps(
+                c,
+                rf"""
+$bat = @'
+@echo off
+C:\OhMyCopyE2E\clip_probe.exe get-kind > C:\OhMyCopyE2E\probe_image_file_kind.txt 2>&1
+'@
+Set-Content -Path '{REMOTE_DIR}\run_probe_image_file.bat' -Value $bat -Encoding ASCII
+Remove-Item -Force '{REMOTE_DIR}\probe_image_file_kind.txt' -EA SilentlyContinue
+schtasks /Delete /TN OhMyCopyProbeImageFile /F 2>$null | Out-Null
+schtasks /Create /TN OhMyCopyProbeImageFile /TR "C:\OhMyCopyE2E\run_probe_image_file.bat" /SC ONCE /ST 00:00 /RL HIGHEST /F /RU "{user}" /RP "{rp}" /IT | Out-Null
+schtasks /Run /TN OhMyCopyProbeImageFile | Out-Null
+Start-Sleep -Seconds 2
+if (Test-Path '{REMOTE_DIR}\probe_image_file_kind.txt') {{ Get-Content '{REMOTE_DIR}\probe_image_file_kind.txt' -Raw }} else {{ 'MISSING' }}
+""",
+                check=False,
+            )
+            if "files 1" in file_kind.lower() and image_file_name.lower() in file_kind.lower():
+                print(f"  VM clipboard reports a file list at {i}s")
+                ok = True
+                break
+        if not ok:
+            print("  VM clipboard probe:", file_kind.strip())
+
+        if ok:
+            print("PASS image file local->VM (OS HDROP)")
+            results.append("PASS image file local->VM (OS HDROP)")
+        else:
+            print("FAIL image file local->VM (OS HDROP)")
+            results.append("FAIL image file local->VM (OS HDROP)")
 
         # ---- small file ----
         print("=== TEST file local->VM ===")
@@ -491,7 +622,7 @@ if (-not (Test-Path $inbox)) {{ 0; return }}
             hit = ps(
                 c,
                 rf"""
-$inbox = Join-Path '{REMOTE_DIR}' 'inbox'
+$inbox = Join-Path (Join-Path '{REMOTE_DIR}' '{DATA_DIR_NAME}') 'inbox'
 if (-not (Test-Path $inbox)) {{ '0'; return }}
 $n = @(Get-ChildItem $inbox -Recurse -File -EA SilentlyContinue | Where-Object {{ $_.Length -eq 262144 }}).Count
 $n
@@ -506,7 +637,7 @@ $n
                 ok = True
                 break
             tmp = Path(tempfile.gettempdir()) / "vm_history3.db"
-            if sftp_get(c, REMOTE_DIR + r"\history.db", tmp) and history_has(tmp, "probe-bin"):
+            if sftp_get(c, REMOTE_DIR + rf"\{DATA_DIR_NAME}\history.db", tmp) and history_has(tmp, "probe-bin"):
                 ok = True
                 break
         if ok:
@@ -543,7 +674,7 @@ $n
             hit = ps(
                 c,
                 rf"""
-$inbox = Join-Path '{REMOTE_DIR}' 'inbox'
+$inbox = Join-Path (Join-Path '{REMOTE_DIR}' '{DATA_DIR_NAME}') 'inbox'
 if (-not (Test-Path $inbox)) {{ '0'; return }}
 $n = @(Get-ChildItem $inbox -Recurse -File -EA SilentlyContinue | Where-Object {{
   $_.Name -eq '{large_name}' -and $_.Length -eq {large_size}
@@ -562,7 +693,7 @@ $n
                 break
             if i % 10 == 9:
                 tmp = Path(tempfile.gettempdir()) / "vm_history_lg.db"
-                if sftp_get(c, REMOTE_DIR + r"\history.db", tmp) and history_has(
+                if sftp_get(c, REMOTE_DIR + rf"\{DATA_DIR_NAME}\history.db", tmp) and history_has(
                     tmp, large_tag
                 ):
                     ok = True
@@ -599,10 +730,10 @@ $n
             hit = ps(
                 c,
                 rf"""
-$inbox = Join-Path '{REMOTE_DIR}' 'inbox'
-if (-not (Test-Path $inbox)) {{ '0'; return }}
-$hits = Get-ChildItem $inbox -Recurse -File -Filter 'hello.txt' -EA SilentlyContinue |
-  Where-Object {{ (Get-Content $_.FullName -Raw -EA SilentlyContinue) -match '{folder_marker}' }}
+$roots = @((Join-Path (Join-Path '{REMOTE_DIR}' '{DATA_DIR_NAME}') 'inbox'), 'C:\Users\{user}\.ohmycopy\inbox')
+$hits = $roots | Where-Object {{ Test-Path $_ }} | ForEach-Object {{
+  Get-ChildItem $_ -Recurse -File -Filter 'hello.txt' -EA SilentlyContinue
+}} | Where-Object {{ (Get-Content $_.FullName -Raw -EA SilentlyContinue) -match '{folder_marker}' }}
 @($hits).Count
 """,
                 check=False,
@@ -616,7 +747,7 @@ $hits = Get-ChildItem $inbox -Recurse -File -Filter 'hello.txt' -EA SilentlyCont
                 print(f"  folder extract ok at {i}s")
                 break
             tmp = Path(tempfile.gettempdir()) / "vm_history_folder.db"
-            if sftp_get(c, REMOTE_DIR + r"\history.db", tmp):
+            if sftp_get(c, REMOTE_DIR + rf"\{DATA_DIR_NAME}\history.db", tmp):
                 if history_has(tmp, "sample_folder") or history_has(tmp, "文件夹"):
                     # history may list folder before extract finishes; keep waiting for files
                     if i >= 5 and history_has(tmp, "sample_folder"):
@@ -624,9 +755,10 @@ $hits = Get-ChildItem $inbox -Recurse -File -Filter 'hello.txt' -EA SilentlyCont
                         hit2 = ps(
                             c,
                             rf"""
-$inbox = Join-Path '{REMOTE_DIR}' 'inbox'
-if (-not (Test-Path $inbox)) {{ '0'; return }}
-$n = @(Get-ChildItem $inbox -Recurse -File -EA SilentlyContinue | Where-Object {{ $_.Name -eq 'chunk.bin' -and $_.Length -eq 1048576 }}).Count
+$roots = @((Join-Path (Join-Path '{REMOTE_DIR}' '{DATA_DIR_NAME}') 'inbox'), 'C:\Users\{user}\.ohmycopy\inbox')
+$n = @($roots | Where-Object {{ Test-Path $_ }} | ForEach-Object {{
+  Get-ChildItem $_ -Recurse -File -EA SilentlyContinue
+}} | Where-Object {{ $_.Name -eq 'chunk.bin' -and $_.Length -eq 1048576 }}).Count
 $n
 """,
                             check=False,
@@ -645,7 +777,7 @@ $n
             print("FAIL folder local->VM (OS HDROP)")
             results.append("FAIL folder local->VM (OS HDROP)")
             tmp = Path(tempfile.gettempdir()) / "vm_history_folder_fail.db"
-            if sftp_get(c, REMOTE_DIR + r"\history.db", tmp):
+            if sftp_get(c, REMOTE_DIR + rf"\{DATA_DIR_NAME}\history.db", tmp):
                 print("  VM history has sample_folder:", history_has(tmp, "sample_folder"))
 
     finally:
@@ -656,9 +788,12 @@ $n
                 local_proc.wait(timeout=3)
             except Exception:
                 local_proc.kill()
-        subprocess.run(["taskkill", "/F", "/IM", "ohmycopy.exe"], capture_output=True)
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command", "Get-Process ohmycopy* -EA SilentlyContinue | Stop-Process -Force"],
+            capture_output=True,
+        )
         try:
-            ps(c, "Get-Process ohmycopy -EA SilentlyContinue | Stop-Process -Force", check=False)
+            ps(c, "Get-Process ohmycopy* -EA SilentlyContinue | Stop-Process -Force", check=False)
         except Exception:
             pass
         c.close()

@@ -104,9 +104,8 @@ fn real_main() -> Result<()> {
 }
 
 fn write_crash_log(msg: &str) -> Result<()> {
-    let dir = ohmycopy::config::Config::config_dir().unwrap_or_else(|_| {
-        std::env::temp_dir().join("OhMyCopy")
-    });
+    let dir = ohmycopy::config::Config::config_dir()
+        .unwrap_or_else(|_| std::env::temp_dir().join("OhMyCopy"));
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join("crash.log");
     let mut f = std::fs::OpenOptions::new()

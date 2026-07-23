@@ -1,8 +1,8 @@
 //! Lightweight protocol helpers (see also e2e_sync).
 
 use ohmycopy::protocol::{
-    ClipboardEvent, ContentKind, DiscoverPacket, Hello, Message, PROTOCOL_VERSION, CAP_TEXT,
-    CAP_IMAGE, CAP_FILE, DISCOVER_ANNOUNCE,
+    ClipboardEvent, ContentKind, DiscoverPacket, Hello, Message, CAP_FILE, CAP_IMAGE, CAP_TEXT,
+    DISCOVER_ANNOUNCE, PROTOCOL_VERSION,
 };
 use uuid::Uuid;
 

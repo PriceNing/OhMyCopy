@@ -19,7 +19,7 @@ pub enum FrameType {
     Unpair = 9,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum ContentKind {
     Text,
     Image,
@@ -72,9 +72,15 @@ pub enum Message {
     AuthChallenge(AuthChallenge),
     AuthResponse(AuthResponse),
     ClipboardEvent(ClipboardEvent),
-    Ack { event_id: Uuid },
-    Ping { ts: u64 },
-    Pong { ts: u64 },
+    Ack {
+        event_id: Uuid,
+    },
+    Ping {
+        ts: u64,
+    },
+    Pong {
+        ts: u64,
+    },
     Error(ErrorMsg),
     /// Intentional unpair: peer should drop session and remove us from clients.json.
     Unpair,

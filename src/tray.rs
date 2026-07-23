@@ -94,8 +94,12 @@ impl AppTray {
             sync_enabled,
             None,
         );
-        let item_quit =
-            MenuItem::with_id("ohmycopy.tray.quit", crate::i18n::t("tray.quit"), true, None);
+        let item_quit = MenuItem::with_id(
+            "ohmycopy.tray.quit",
+            crate::i18n::t("tray.quit"),
+            true,
+            None,
+        );
 
         let menu = Menu::new();
         menu.append(&item_show).context("tray menu append show")?;
@@ -250,7 +254,9 @@ fn wake_egui(shared: &TrayShared) {
 /// Linux tray needs a real graphical session (X11 or Wayland).
 #[cfg(target_os = "linux")]
 fn ensure_linux_display() -> Result<()> {
-    let has_x11 = std::env::var_os("DISPLAY").filter(|v| !v.is_empty()).is_some();
+    let has_x11 = std::env::var_os("DISPLAY")
+        .filter(|v| !v.is_empty())
+        .is_some();
     let has_wayland = std::env::var_os("WAYLAND_DISPLAY")
         .filter(|v| !v.is_empty())
         .is_some();
@@ -438,10 +444,5 @@ unsafe extern "system" {
         cy: i32,
         flags: u32,
     ) -> i32;
-    fn PostMessageW(
-        hwnd: *mut core::ffi::c_void,
-        msg: u32,
-        wparam: usize,
-        lparam: isize,
-    ) -> i32;
+    fn PostMessageW(hwnd: *mut core::ffi::c_void, msg: u32, wparam: usize, lparam: isize) -> i32;
 }

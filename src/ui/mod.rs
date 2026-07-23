@@ -149,37 +149,52 @@ impl eframe::App for OhMyCopyApp {
         egui::TopBottomPanel::top("top")
             .frame(bar_frame)
             .show(ctx, |ui| {
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.heading(egui::RichText::new("OhMyCopy").color(t.accent).strong());
-                ui.label(
-                    egui::RichText::new(crate::i18n::t("app.subtitle"))
-                        .color(t.text_muted)
-                        .small(),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let sync_label = if self.ui.sync_enabled {
-                        crate::i18n::t("app.sync_on")
-                    } else {
-                        crate::i18n::t("app.sync_off")
-                    };
-                    if ui
-                        .add(egui::Button::new(sync_label).fill(t.card))
-                        .clicked()
-                    {
-                        self.ui.sync_enabled = !self.ui.sync_enabled;
-                        self.ui.cmd_toggle_sync = true;
-                    }
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.heading(egui::RichText::new("OhMyCopy").color(t.accent).strong());
+                    ui.label(
+                        egui::RichText::new(crate::i18n::t("app.subtitle"))
+                            .color(t.text_muted)
+                            .small(),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let sync_label = if self.ui.sync_enabled {
+                            crate::i18n::t("app.sync_on")
+                        } else {
+                            crate::i18n::t("app.sync_off")
+                        };
+                        if ui.add(egui::Button::new(sync_label).fill(t.card)).clicked() {
+                            self.ui.sync_enabled = !self.ui.sync_enabled;
+                            self.ui.cmd_toggle_sync = true;
+                        }
+                    });
                 });
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    tab_btn(
+                        ui,
+                        &mut self.ui.tab,
+                        Tab::History,
+                        crate::i18n::t("tab.history"),
+                        &t,
+                    );
+                    tab_btn(
+                        ui,
+                        &mut self.ui.tab,
+                        Tab::Devices,
+                        crate::i18n::t("tab.devices"),
+                        &t,
+                    );
+                    tab_btn(
+                        ui,
+                        &mut self.ui.tab,
+                        Tab::Settings,
+                        crate::i18n::t("tab.settings"),
+                        &t,
+                    );
+                });
+                ui.add_space(4.0);
             });
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                tab_btn(ui, &mut self.ui.tab, Tab::History, crate::i18n::t("tab.history"), &t);
-                tab_btn(ui, &mut self.ui.tab, Tab::Devices, crate::i18n::t("tab.devices"), &t);
-                tab_btn(ui, &mut self.ui.tab, Tab::Settings, crate::i18n::t("tab.settings"), &t);
-            });
-            ui.add_space(4.0);
-        });
 
         // Fixed height avoids toast show/hide resizing the bar (visual flicker).
         let bottom_h = if self.ui.firewall_hint.is_some() {
@@ -214,10 +229,10 @@ impl eframe::App for OhMyCopyApp {
         egui::CentralPanel::default()
             .frame(central_frame)
             .show(ctx, |ui| match self.ui.tab {
-            Tab::History => draw_history(ui, &mut self.ui, &t),
-            Tab::Devices => draw_devices(ui, &mut self.ui, &t),
-            Tab::Settings => draw_settings(ui, &mut self.ui, &t),
-        });
+                Tab::History => draw_history(ui, &mut self.ui, &t),
+                Tab::Devices => draw_devices(ui, &mut self.ui, &t),
+                Tab::Settings => draw_settings(ui, &mut self.ui, &t),
+            });
 
         // Only repaint frequently while a toast is counting down.
         if self.ui.toast_ttl_frames > 0 {
@@ -228,7 +243,13 @@ impl eframe::App for OhMyCopyApp {
     }
 }
 
-fn tab_btn(ui: &mut egui::Ui, current: &mut Tab, tab: Tab, label: impl Into<String>, t: &GlassTheme) {
+fn tab_btn(
+    ui: &mut egui::Ui,
+    current: &mut Tab,
+    tab: Tab,
+    label: impl Into<String>,
+    t: &GlassTheme,
+) {
     let label = label.into();
     let selected = *current == tab;
     let fill = if selected {
@@ -294,28 +315,23 @@ fn display_preview(s: &str, max_chars: usize) -> String {
     } else {
         format!(
             "{}…",
-            flat.chars().take(max_chars.saturating_sub(1)).collect::<String>()
+            flat.chars()
+                .take(max_chars.saturating_sub(1))
+                .collect::<String>()
         )
     }
 }
 
 /// One history row with a fixed bounding box — cannot grow past `full_w`.
 /// Returns true if the user clicked 复制.
-fn history_row(
-    ui: &mut egui::Ui,
-    full_w: f32,
-    preview: &str,
-    meta: &str,
-    t: &GlassTheme,
-) -> bool {
+fn history_row(ui: &mut egui::Ui, full_w: f32, preview: &str, meta: &str, t: &GlassTheme) -> bool {
     const ROW_H: f32 = 52.0;
     const BTN_W: f32 = 52.0;
     const BTN_H: f32 = 28.0;
     const PAD: f32 = 10.0;
     const GAP: f32 = 8.0;
 
-    let (row_rect, _resp) =
-        ui.allocate_exact_size(egui::vec2(full_w, ROW_H), egui::Sense::hover());
+    let (row_rect, _resp) = ui.allocate_exact_size(egui::vec2(full_w, ROW_H), egui::Sense::hover());
 
     // Background card
     let card = row_rect.shrink2(egui::vec2(0.0, 2.0));
@@ -350,17 +366,18 @@ fn history_row(
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
         ui.vertical(|ui| {
             ui.set_max_width(text_rect.width());
+            ui.add(egui::Label::new(egui::RichText::new(&line).color(t.text)).truncate());
             ui.add(
-                egui::Label::new(egui::RichText::new(&line).color(t.text)).truncate(),
-            );
-            ui.add(
-                egui::Label::new(egui::RichText::new(meta).small().color(t.text_muted))
-                    .truncate(),
+                egui::Label::new(egui::RichText::new(meta).small().color(t.text_muted)).truncate(),
             );
         });
     });
 
-    if ui.put(btn_rect, egui::Button::new(crate::i18n::t("history.copy")).fill(t.accent.gamma_multiply(0.35)))
+    if ui
+        .put(
+            btn_rect,
+            egui::Button::new(crate::i18n::t("history.copy")).fill(t.accent.gamma_multiply(0.35)),
+        )
         .clicked()
     {
         clicked = true;
@@ -395,10 +412,7 @@ fn draw_history(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
 
                 if state.history.is_empty() {
                     ui.label(
-                        egui::RichText::new(
-                            crate::i18n::t("history.empty"),
-                        )
-                        .color(t.text_muted),
+                        egui::RichText::new(crate::i18n::t("history.empty")).color(t.text_muted),
                     );
                     return;
                 }
@@ -441,11 +455,9 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
             }
         });
         ui.label(
-            egui::RichText::new(
-                crate::i18n::t("devices.mine_help"),
-            )
-            .small()
-            .color(t.text_muted),
+            egui::RichText::new(crate::i18n::t("devices.mine_help"))
+                .small()
+                .color(t.text_muted),
         );
         ui.add_space(6.0);
 
@@ -458,10 +470,7 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
             .show(ui, |ui| {
                 if state.saved_clients.is_empty() {
                     ui.label(
-                        egui::RichText::new(
-                            crate::i18n::t("devices.none"),
-                        )
-                        .color(t.text_muted),
+                        egui::RichText::new(crate::i18n::t("devices.none")).color(t.text_muted),
                     );
                 }
                 for c in &mut state.saved_clients {
@@ -501,12 +510,14 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                                     Some((c.device_id, c.addr.clone(), c.name.clone()));
                             }
                             // Simple toggle: text only changes; slight accent when on.
-                            let ign_label = if c.ignored { crate::i18n::t("devices.resume_sync") } else { crate::i18n::t("devices.pause_sync") };
+                            let ign_label = if c.ignored {
+                                crate::i18n::t("devices.resume_sync")
+                            } else {
+                                crate::i18n::t("devices.pause_sync")
+                            };
                             let ign_btn = if c.ignored {
-                                egui::Button::new(
-                                    egui::RichText::new(ign_label).color(t.warning),
-                                )
-                                .fill(egui::Color32::from_rgb(55, 48, 32))
+                                egui::Button::new(egui::RichText::new(ign_label).color(t.warning))
+                                    .fill(egui::Color32::from_rgb(55, 48, 32))
                             } else {
                                 egui::Button::new(
                                     egui::RichText::new(ign_label).color(t.text_muted),
@@ -524,14 +535,19 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                             {
                                 let new_val = !c.ignored;
                                 c.ignored = new_val; // optimistic UI flip
-                                set_ignore =
-                                    Some((c.device_id, c.addr.clone(), new_val));
+                                set_ignore = Some((c.device_id, c.addr.clone(), new_val));
                             }
                             if connected {
-                                ui.label(egui::RichText::new(crate::i18n::t("devices.connected")).color(t.accent).small());
+                                ui.label(
+                                    egui::RichText::new(crate::i18n::t("devices.connected"))
+                                        .color(t.accent)
+                                        .small(),
+                                );
                             } else if connecting {
                                 ui.label(
-                                    egui::RichText::new(crate::i18n::t("devices.connecting")).color(t.warning).small(),
+                                    egui::RichText::new(crate::i18n::t("devices.connecting"))
+                                        .color(t.warning)
+                                        .small(),
                                 );
                             } else {
                                 ui.label(
@@ -564,9 +580,12 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                 .show(ui.ctx(), |ui| {
                     ui.set_min_width(320.0);
                     ui.label(
-                        egui::RichText::new(crate::i18n::t_args("devices.confirm_remove_body", &[("name", &name)]))
-                            .strong()
-                            .color(t.text),
+                        egui::RichText::new(crate::i18n::t_args(
+                            "devices.confirm_remove_body",
+                            &[("name", &name)],
+                        ))
+                        .strong()
+                        .color(t.text),
                     );
                     ui.add_space(4.0);
                     ui.label(
@@ -617,11 +636,9 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                 .color(t.text),
         );
         ui.label(
-            egui::RichText::new(
-                crate::i18n::t("devices.nearby_help"),
-            )
-            .small()
-            .color(t.text_muted),
+            egui::RichText::new(crate::i18n::t("devices.nearby_help"))
+                .small()
+                .color(t.text_muted),
         );
         ui.add_space(6.0);
 
@@ -630,11 +647,9 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
         // Nearby already filtered in backend to exclude saved clients.
         if state.nearby.is_empty() {
             ui.label(
-                egui::RichText::new(
-                    crate::i18n::t("devices.nearby_none"),
-                )
-                .color(t.text_muted)
-                .small(),
+                egui::RichText::new(crate::i18n::t("devices.nearby_none"))
+                    .color(t.text_muted)
+                    .small(),
             );
         } else {
             egui::ScrollArea::vertical()
@@ -642,14 +657,13 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                 .max_height(140.0)
                 .show(ui, |ui| {
                     for d in &state.nearby {
-                        let already = state.peers.iter().find(|p| {
-                            p.device_id.to_string() == d.device_id || p.addr == d.addr
-                        });
+                        let already = state
+                            .peers
+                            .iter()
+                            .find(|p| p.device_id.to_string() == d.device_id || p.addr == d.addr);
                         let connecting = already.map(|p| p.connecting).unwrap_or(false);
                         let auth_failed = already
-                            .map(|p| {
-                                p.status_kind == crate::net::peer::PeerStatus::AuthFailed
-                            })
+                            .map(|p| p.status_kind == crate::net::peer::PeerStatus::AuthFailed)
                             .unwrap_or(false);
 
                         ui.horizontal(|ui| {
@@ -670,9 +684,11 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                                 |ui| {
                                     if connecting {
                                         ui.label(
-                                            egui::RichText::new(crate::i18n::t("devices.connecting"))
-                                                .color(t.warning)
-                                                .small(),
+                                            egui::RichText::new(crate::i18n::t(
+                                                "devices.connecting",
+                                            ))
+                                            .color(t.warning)
+                                            .small(),
                                         );
                                     } else if ui
                                         .add(
@@ -689,9 +705,11 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                                     }
                                     if auth_failed {
                                         ui.label(
-                                            egui::RichText::new(crate::i18n::t("devices.bad_password"))
-                                                .color(t.warning)
-                                                .small(),
+                                            egui::RichText::new(crate::i18n::t(
+                                                "devices.bad_password",
+                                            ))
+                                            .color(t.warning)
+                                            .small(),
                                         );
                                     }
                                 },
@@ -707,7 +725,11 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
         }
 
         ui.add_space(12.0);
-        ui.label(egui::RichText::new(crate::i18n::t("devices.manual")).strong().color(t.text));
+        ui.label(
+            egui::RichText::new(crate::i18n::t("devices.manual"))
+                .strong()
+                .color(t.text),
+        );
         ui.horizontal(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut state.manual_addr)
@@ -715,18 +737,19 @@ fn draw_devices(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                     .hint_text(crate::i18n::t("devices.manual_hint")),
             );
             if ui
-                .add(egui::Button::new(crate::i18n::t("devices.connect")).fill(t.accent.gamma_multiply(0.45)))
+                .add(
+                    egui::Button::new(crate::i18n::t("devices.connect"))
+                        .fill(t.accent.gamma_multiply(0.45)),
+                )
                 .clicked()
             {
                 state.cmd_add_manual = true;
             }
         });
         ui.label(
-            egui::RichText::new(
-                crate::i18n::t("devices.manual_help"),
-            )
-            .small()
-            .color(t.text_muted),
+            egui::RichText::new(crate::i18n::t("devices.manual_help"))
+                .small()
+                .color(t.text_muted),
         );
     });
 }
@@ -754,7 +777,11 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                 // Stretch content column like history/devices cards.
                 let col_w = ui.available_width().min(520.0);
 
-                ui.label(egui::RichText::new(crate::i18n::t("settings.basic")).strong().color(t.text));
+                ui.label(
+                    egui::RichText::new(crate::i18n::t("settings.basic"))
+                        .strong()
+                        .color(t.text),
+                );
                 ui.add_space(8.0);
 
                 egui::Grid::new("settings")
@@ -779,9 +806,7 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                             .selected_text(current_label)
                             .show_ui(ui, |ui| {
                                 for (code, name) in &langs {
-                                    if ui
-                                        .selectable_label(state.language == *code, name)
-                                        .clicked()
+                                    if ui.selectable_label(state.language == *code, name).clicked()
                                         && state.language != *code
                                     {
                                         state.language = code.clone();
@@ -792,14 +817,19 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                             });
                         ui.end_row();
 
-                        ui.label(egui::RichText::new(crate::i18n::t("settings.device_name")).color(t.text));
+                        ui.label(
+                            egui::RichText::new(crate::i18n::t("settings.device_name"))
+                                .color(t.text),
+                        );
                         ui.add(
                             egui::TextEdit::singleline(&mut state.device_name)
                                 .desired_width(field_w),
                         );
                         ui.end_row();
 
-                        ui.label(egui::RichText::new(crate::i18n::t("settings.password")).color(t.text));
+                        ui.label(
+                            egui::RichText::new(crate::i18n::t("settings.password")).color(t.text),
+                        );
                         ui.horizontal(|ui| {
                             let eye_w = 40.0;
                             let edit_w = (field_w - eye_w - 6.0).max(120.0);
@@ -818,9 +848,7 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                                 .add_sized(
                                     [eye_w, 24.0],
                                     egui::Button::new(
-                                        egui::RichText::new(eye_label)
-                                            .small()
-                                            .color(t.text_muted),
+                                        egui::RichText::new(eye_label).small().color(t.text_muted),
                                     )
                                     .fill(t.card),
                                 )
@@ -836,25 +864,35 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                         });
                         ui.end_row();
 
-                        ui.label(egui::RichText::new(crate::i18n::t("settings.tcp_port")).color(t.text));
+                        ui.label(
+                            egui::RichText::new(crate::i18n::t("settings.tcp_port")).color(t.text),
+                        );
                         ui.add(
                             egui::TextEdit::singleline(&mut state.tcp_port).desired_width(field_w),
                         );
                         ui.end_row();
 
-                        ui.label(egui::RichText::new(crate::i18n::t("settings.udp_port")).color(t.text));
+                        ui.label(
+                            egui::RichText::new(crate::i18n::t("settings.udp_port")).color(t.text),
+                        );
                         ui.add(
                             egui::TextEdit::singleline(&mut state.udp_port).desired_width(field_w),
                         );
                         ui.end_row();
 
-                        ui.label(egui::RichText::new(crate::i18n::t("settings.max_payload")).color(t.text));
+                        ui.label(
+                            egui::RichText::new(crate::i18n::t("settings.max_payload"))
+                                .color(t.text),
+                        );
                         ui.horizontal(|ui| {
                             ui.add(
                                 egui::TextEdit::singleline(&mut state.max_payload_mb)
                                     .desired_width((field_w - 40.0).max(80.0)),
                             );
-                            ui.label(egui::RichText::new(crate::i18n::t("settings.mb")).color(t.text_muted));
+                            ui.label(
+                                egui::RichText::new(crate::i18n::t("settings.mb"))
+                                    .color(t.text_muted),
+                            );
                         });
                         ui.end_row();
                     });
@@ -864,11 +902,9 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                         .color(t.text_muted),
                 );
                 ui.label(
-                    egui::RichText::new(
-                        crate::i18n::t("settings.max_payload_help"),
-                    )
-                    .small()
-                    .color(t.text_muted),
+                    egui::RichText::new(crate::i18n::t("settings.max_payload_help"))
+                        .small()
+                        .color(t.text_muted),
                 );
 
                 if crate::config::Config::is_insecure_default_password(&state.password) {
@@ -896,11 +932,9 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                     egui::RichText::new(crate::i18n::t("settings.start_tray")).color(t.text),
                 );
                 ui.label(
-                    egui::RichText::new(
-                        crate::i18n::t("settings.start_tray_help"),
-                    )
-                    .small()
-                    .color(t.text_muted),
+                    egui::RichText::new(crate::i18n::t("settings.start_tray_help"))
+                        .small()
+                        .color(t.text_muted),
                 );
 
                 ui.add_space(16.0);
@@ -932,21 +966,20 @@ fn draw_settings(ui: &mut egui::Ui, state: &mut UiState, t: &GlassTheme) {
                 ui.separator();
                 ui.add_space(8.0);
                 ui.label(
-                    egui::RichText::new(
-                        crate::i18n::t("settings.port_password_hint"),
-                    )
-                    .small()
-                    .color(t.warning),
+                    egui::RichText::new(crate::i18n::t("settings.port_password_hint"))
+                        .small()
+                        .color(t.warning),
                 );
                 ui.add_space(4.0);
                 let cfg_hint = crate::config::Config::config_dir()
-                    .map(|p| crate::i18n::t_args("settings.data_path", &[("path", &p.display().to_string())]))
+                    .map(|p| {
+                        crate::i18n::t_args(
+                            "settings.data_path",
+                            &[("path", &p.display().to_string())],
+                        )
+                    })
                     .unwrap_or_else(|_| crate::i18n::t("settings.data_path_fallback"));
-                ui.label(
-                    egui::RichText::new(cfg_hint)
-                        .small()
-                        .color(t.text_muted),
-                );
+                ui.label(egui::RichText::new(cfg_hint).small().color(t.text_muted));
                 // Bottom breathing room so last controls aren't flush against the clip.
                 ui.add_space(8.0);
             });

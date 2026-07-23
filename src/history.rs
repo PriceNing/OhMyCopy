@@ -250,10 +250,7 @@ fn make_preview(text: &str, max_chars: usize) -> String {
     if trimmed.chars().count() <= max_chars {
         trimmed.to_string()
     } else {
-        format!(
-            "{}…",
-            trimmed.chars().take(max_chars).collect::<String>()
-        )
+        format!("{}…", trimmed.chars().take(max_chars).collect::<String>())
     }
 }
 

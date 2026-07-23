@@ -1,4 +1,4 @@
-use crate::protocol::ClipboardEvent;
+use crate::protocol::{ClipboardEvent, ContentKind};
 use parking_lot::Mutex;
 use std::collections::{HashSet, VecDeque};
 use std::time::{Duration, Instant};
@@ -44,28 +44,28 @@ impl SeenSet {
 /// Tracks recent sync writes so clipboard watcher does not re-broadcast.
 pub struct SyncGuard {
     until: Instant,
-    last_hash: Option<[u8; 32]>,
+    last_key: Option<([u8; 32], ContentKind)>,
 }
 
 impl Default for SyncGuard {
     fn default() -> Self {
         Self {
             until: Instant::now(),
-            last_hash: None,
+            last_key: None,
         }
     }
 }
 
 impl SyncGuard {
-    pub fn mark_sync_write(&mut self, hash: [u8; 32], cooldown: Duration) {
+    pub fn mark_sync_write(&mut self, hash: [u8; 32], kind: ContentKind, cooldown: Duration) {
         self.until = Instant::now() + cooldown;
-        self.last_hash = Some(hash);
+        self.last_key = Some((hash, kind));
     }
 
-    pub fn should_suppress(&self, hash: &[u8; 32]) -> bool {
+    pub fn should_suppress(&self, hash: &[u8; 32], kind: ContentKind) -> bool {
         if Instant::now() < self.until {
-            if let Some(h) = &self.last_hash {
-                return h == hash;
+            if let Some(key) = self.last_key {
+                return key == (*hash, kind);
             }
             return true;
         }
@@ -101,8 +101,11 @@ impl EngineCore {
         if payload.len() as u64 > self.max_payload_bytes {
             return None; // caller should notify UI about limit
         }
-        let content_hash = *blake3::hash(&payload).as_bytes();
-        if self.sync_guard.should_suppress(&content_hash) {
+        let content_hash = content_hash(ContentKind::Text, &payload);
+        if self
+            .sync_guard
+            .should_suppress(&content_hash, ContentKind::Text)
+        {
             return None;
         }
         let event_id = Uuid::new_v4();
@@ -132,8 +135,11 @@ impl EngineCore {
         if payload.len() as u64 > self.max_payload_bytes {
             return None;
         }
-        let content_hash = *blake3::hash(&payload).as_bytes();
-        if self.sync_guard.should_suppress(&content_hash) {
+        let content_hash = content_hash(ContentKind::File, &payload);
+        if self
+            .sync_guard
+            .should_suppress(&content_hash, ContentKind::File)
+        {
             return None;
         }
         let event_id = Uuid::new_v4();
@@ -162,8 +168,11 @@ impl EngineCore {
         if png_payload.len() as u64 > self.max_payload_bytes {
             return None;
         }
-        let content_hash = *blake3::hash(&png_payload).as_bytes();
-        if self.sync_guard.should_suppress(&content_hash) {
+        let content_hash = content_hash(ContentKind::Image, &png_payload);
+        if self
+            .sync_guard
+            .should_suppress(&content_hash, ContentKind::Image)
+        {
             return None;
         }
         let event_id = Uuid::new_v4();
@@ -195,13 +204,31 @@ impl EngineCore {
         // Suppress local clipboard watcher so applying the text does not
         // create a *new* outbound event (relay uses the original event_id).
         self.sync_guard
-            .mark_sync_write(ev.content_hash, Duration::from_millis(800));
+            .mark_sync_write(ev.content_hash, ev.kind, Duration::from_millis(800));
         true
     }
 
     pub fn note_oversize_local(&self, len: u64) -> bool {
         len > self.max_payload_bytes
     }
+}
+
+/// Clipboard payload bytes do not describe their user-visible semantics.  For
+/// example, a PNG copied as a bitmap and the same PNG copied from Explorer are
+/// different clipboard entries: one must paste pixels, the other a file.
+/// Domain-separate hashes so synchronization guards and future deduplication
+/// cannot merge those entries merely because their bytes happen to match.
+fn content_hash(kind: ContentKind, payload: &[u8]) -> [u8; 32] {
+    let tag = match kind {
+        ContentKind::Text => b"text".as_slice(),
+        ContentKind::File => b"file".as_slice(),
+        ContentKind::Image => b"image".as_slice(),
+    };
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(tag);
+    hasher.update(&[0]);
+    hasher.update(payload);
+    *hasher.finalize().as_bytes()
 }
 
 pub fn now_ms() -> u64 {
@@ -240,9 +267,20 @@ mod tests {
         let mut eng = EngineCore::new(id, 1024 * 1024, true);
         let hash = *blake3::hash(b"x").as_bytes();
         eng.sync_guard
-            .mark_sync_write(hash, Duration::from_secs(5));
-        assert!(eng.sync_guard.should_suppress(&hash));
-        assert!(!eng.sync_guard.should_suppress(blake3::hash(b"y").as_bytes()));
+            .mark_sync_write(hash, ContentKind::Image, Duration::from_secs(5));
+        assert!(eng.sync_guard.should_suppress(&hash, ContentKind::Image));
+        assert!(!eng.sync_guard.should_suppress(&hash, ContentKind::File));
+        assert!(!eng
+            .sync_guard
+            .should_suppress(blake3::hash(b"y").as_bytes(), ContentKind::Image));
+    }
+
+    #[test]
+    fn equal_bytes_have_distinct_hashes_for_distinct_clipboard_kinds() {
+        assert_ne!(
+            content_hash(ContentKind::Image, b"png bytes"),
+            content_hash(ContentKind::File, b"png bytes")
+        );
     }
 
     #[test]

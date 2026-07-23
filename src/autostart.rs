@@ -22,10 +22,7 @@ pub fn apply(enabled: bool) -> Result<()> {
     if enabled {
         let exe = current_exe_path()?;
         if !exe.is_file() {
-            anyhow::bail!(
-                "current executable path is not a file: {}",
-                exe.display()
-            );
+            anyhow::bail!("current executable path is not a file: {}", exe.display());
         }
         #[cfg(windows)]
         {
@@ -72,7 +69,7 @@ fn enable() -> Result<()> {
     let exe = current_exe_path()?;
     #[cfg(windows)]
     {
-        return windows_set_run(&exe, true);
+        windows_set_run(&exe, true)
     }
     #[cfg(target_os = "linux")]
     {
@@ -92,7 +89,7 @@ fn enable() -> Result<()> {
 fn disable() -> Result<()> {
     #[cfg(windows)]
     {
-        return windows_set_run(&PathBuf::new(), false);
+        windows_set_run(&PathBuf::new(), false)
     }
     #[cfg(target_os = "linux")]
     {
@@ -112,7 +109,7 @@ fn disable() -> Result<()> {
 pub fn is_registered() -> bool {
     #[cfg(windows)]
     {
-        return windows_is_registered();
+        windows_is_registered()
     }
     #[cfg(target_os = "linux")]
     {

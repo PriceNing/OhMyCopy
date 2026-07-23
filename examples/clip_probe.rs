@@ -48,7 +48,11 @@ fn main() -> Result<()> {
                     println!("{}", x.display());
                 }
             }
-            ClipContent::Image { width, height, rgba } => {
+            ClipContent::Image {
+                width,
+                height,
+                rgba,
+            } => {
                 println!("image {}x{} rgba={}", width, height, rgba.len());
             }
         },
@@ -63,11 +67,10 @@ fn main() -> Result<()> {
             if cmd == "set-folder" && !p.is_dir() {
                 bail!("not a directory: {}", p.display());
             }
-            // CF_HDROP for file or folder. Use from_sync then clear suppress so only
-            // OhMyCopy (other process) observes the OS clipboard change.
+            // CF_HDROP for file or folder.  This is a local write so the
+            // OhMyCopy watcher observes and sends the OS clipboard change.
             let abs = p.canonicalize()?;
-            clip.set_files_from_sync(&[abs.clone()])?;
-            let _ = clip.take_suppress();
+            clip.set_files_local(std::slice::from_ref(&abs))?;
             println!(
                 "ok {} {}",
                 if p.is_dir() { "set-folder" } else { "set-file" },
@@ -75,7 +78,10 @@ fn main() -> Result<()> {
             );
         }
         "set-image-png" => {
-            let p = PathBuf::from(args.first().ok_or_else(|| anyhow::anyhow!("need png path"))?);
+            let p = PathBuf::from(
+                args.first()
+                    .ok_or_else(|| anyhow::anyhow!("need png path"))?,
+            );
             let bytes = std::fs::read(&p)?;
             let (w, h, rgba) = png_to_rgba(&bytes)?;
             clip.set_image_local(w, h, rgba)?;
@@ -83,8 +89,13 @@ fn main() -> Result<()> {
         }
         "make-png" => {
             // write a tiny red png to path
-            let p = PathBuf::from(args.first().ok_or_else(|| anyhow::anyhow!("need out path"))?);
-            let rgba = vec![255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255];
+            let p = PathBuf::from(
+                args.first()
+                    .ok_or_else(|| anyhow::anyhow!("need out path"))?,
+            );
+            let rgba = vec![
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,
+            ];
             let png = rgba_to_png(2, 2, &rgba)?;
             std::fs::write(&p, png)?;
             println!("ok make-png {}", p.display());

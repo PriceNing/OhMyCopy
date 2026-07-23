@@ -157,17 +157,16 @@ impl NetworkHub {
 
     fn refuse_if_insecure(&self) -> Result<()> {
         if self.has_insecure_default_password() {
-            let _ = self.events.send(NetEvent::Toast(
-                crate::i18n::t("status.need_password"),
-            ));
+            let _ = self
+                .events
+                .send(NetEvent::Toast(crate::i18n::t("status.need_password")));
             bail!("insecure default password");
         }
         Ok(())
     }
 
     pub fn is_ignored(&self, device_id: Uuid, addr: SocketAddr) -> bool {
-        self.ignored_ids.lock().contains(&device_id)
-            || self.ignored_addrs.lock().contains(&addr)
+        self.ignored_ids.lock().contains(&device_id) || self.ignored_addrs.lock().contains(&addr)
     }
 
     /// Update ignore flag for a client (bidirectional clipboard mute).
@@ -186,7 +185,11 @@ impl NetworkHub {
     }
 
     /// Replace ignore sets from clients.json.
-    pub fn sync_ignored(&self, ids: impl IntoIterator<Item = Uuid>, addrs: impl IntoIterator<Item = SocketAddr>) {
+    pub fn sync_ignored(
+        &self,
+        ids: impl IntoIterator<Item = Uuid>,
+        addrs: impl IntoIterator<Item = SocketAddr>,
+    ) {
         *self.ignored_ids.lock() = ids.into_iter().collect();
         *self.ignored_addrs.lock() = addrs.into_iter().collect();
     }
@@ -265,7 +268,10 @@ impl NetworkHub {
             return;
         }
         self.known.lock().insert(device_id, addr);
-        let _ = self.events.send(NetEvent::Toast(crate::i18n::t_args("status.connecting_addr", &[("addr", &addr.to_string())])));
+        let _ = self.events.send(NetEvent::Toast(crate::i18n::t_args(
+            "status.connecting_addr",
+            &[("addr", &addr.to_string())],
+        )));
         let hub = Arc::clone(self);
         self.spawn(async move {
             hub.force_dial(device_id, addr).await;
@@ -277,9 +283,10 @@ impl NetworkHub {
         if self.refuse_if_insecure().is_err() {
             return;
         }
-        let _ = self
-            .events
-            .send(NetEvent::Toast(crate::i18n::t_args("status.connecting_addr", &[("addr", &addr.to_string())])));
+        let _ = self.events.send(NetEvent::Toast(crate::i18n::t_args(
+            "status.connecting_addr",
+            &[("addr", &addr.to_string())],
+        )));
         let hub = Arc::clone(self);
         self.spawn(async move {
             hub.dial_addr(addr).await;
@@ -335,7 +342,12 @@ impl NetworkHub {
         self.remove_client_inner(device_id, addr, false);
     }
 
-    fn remove_client_inner(self: &Arc<Self>, device_id: Option<Uuid>, addr: SocketAddr, notify: bool) {
+    fn remove_client_inner(
+        self: &Arc<Self>,
+        device_id: Option<Uuid>,
+        addr: SocketAddr,
+        notify: bool,
+    ) {
         if notify {
             // Best-effort Unpair so the other side also drops clients.json entry.
             let payload = Message::Unpair.encode().ok();
@@ -441,35 +453,98 @@ impl NetworkHub {
 
     /// Send a local clipboard event to all connected peers.
     pub fn broadcast_clipboard(&self, ev: ClipboardEvent) {
+        crate::audit::record(format!(
+            "net_broadcast event={} kind={:?} file={:?} bytes={}",
+            ev.event_id,
+            ev.kind,
+            ev.file_name,
+            ev.payload.len()
+        ));
         if self.refuse_if_insecure().is_err() {
+            crate::audit::record(format!(
+                "net_broadcast event={} rejected=insecure",
+                ev.event_id
+            ));
             return;
         }
-        self.relay_clipboard(&ev, None);
+        if self.relay_clipboard(&ev, None) == 0 {
+            // A watcher event may arrive just before the async authenticated
+            // session inserts its sender into `live`. Retry briefly instead of
+            // silently losing the user copy.
+            let live = Arc::clone(&self.live);
+            let ignored_ids = Arc::clone(&self.ignored_ids);
+            let ignored_addrs = Arc::clone(&self.ignored_addrs);
+            let rt = self.rt.clone();
+            self.rt.spawn(async move {
+                for attempt in 0..12 {
+                    tokio::time::sleep(Duration::from_millis(250 * (attempt + 1))).await;
+                    let targets: Vec<mpsc::Sender<Vec<u8>>> = {
+                        let blocked_ids = ignored_ids.lock();
+                        let blocked_addrs = ignored_addrs.lock();
+                        live.lock()
+                            .iter()
+                            .filter(|(id, peer)| {
+                                !blocked_ids.contains(id) && !blocked_addrs.contains(&peer.addr)
+                            })
+                            .map(|(_, peer)| peer.tx.clone())
+                            .collect()
+                    };
+                    if targets.is_empty() {
+                        continue;
+                    }
+                    let target_count = targets.len();
+                    let Ok(body) = Message::ClipboardEvent(ev.clone()).encode() else {
+                        return;
+                    };
+                    for tx in targets {
+                        match tx.try_send(body.clone()) {
+                            Ok(()) => {}
+                            Err(tokio::sync::mpsc::error::TrySendError::Full(body)) => {
+                                let tx = tx.clone();
+                                rt.spawn(async move {
+                                    let _ = tx.send(body).await;
+                                });
+                            }
+                            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {}
+                        }
+                    }
+                    crate::audit::record(format!(
+                        "net_broadcast_retry event={} kind={:?} targets={}",
+                        ev.event_id, ev.kind, target_count
+                    ));
+                    return;
+                }
+            });
+        }
     }
 
     /// Relay an event to connected peers, optionally skipping one peer
     /// (the hop we just received from). Enables A↔B↔C star/mesh topology:
     /// B copies → A applies + relays to C (and not back to B).
     /// Ignored clients never receive clipboard frames.
-    pub fn relay_clipboard(&self, ev: &ClipboardEvent, except_peer: Option<Uuid>) {
+    pub fn relay_clipboard(&self, ev: &ClipboardEvent, except_peer: Option<Uuid>) -> usize {
         let body = match Message::ClipboardEvent(ev.clone()).encode() {
             Ok(b) => b,
             Err(e) => {
                 tracing::error!(error = %e, "encode clipboard event");
                 tracing::error!(error = %e, "encode clipboard event");
-                let _ = self.events.send(NetEvent::Toast(
-                    crate::i18n::t("status.sync_failed"),
-                ));
-                return;
+                let _ = self
+                    .events
+                    .send(NetEvent::Toast(crate::i18n::t("status.sync_failed")));
+                return 0;
             }
         };
         let body_len = body.len();
         if body_len > MAX_FRAME_BYTES {
-            tracing::error!(body_len, max = MAX_FRAME_BYTES, "clipboard event exceeds frame cap");
-            let _ = self.events.send(NetEvent::Toast(
-                crate::i18n::t("status.oversize"),
-            ));
-            return;
+            tracing::error!(
+                body_len,
+                max = MAX_FRAME_BYTES,
+                "clipboard event exceeds frame cap"
+            );
+            let _ = self
+                .events
+                .send(NetEvent::Toast(crate::i18n::t("status.oversize")));
+            return 0;
         }
         let ignored_ids = self.ignored_ids.lock().clone();
         let ignored_addrs = self.ignored_addrs.lock().clone();
@@ -506,6 +581,10 @@ impl NetworkHub {
             }
         }
         if sent > 0 {
+            crate::audit::record(format!(
+                "net_relay event={} kind={:?} sent={} failed={}",
+                ev.event_id, ev.kind, sent, failed
+            ));
             tracing::info!(
                 event = %ev.event_id,
                 except = ?except_peer,
@@ -514,18 +593,29 @@ impl NetworkHub {
                 "relayed clipboard event"
             );
         } else if failed > 0 || except_peer.is_none() {
-            tracing::warn!(failed, body_len, "clipboard event not delivered to any peer");
-            let _ = self.events.send(NetEvent::Toast(
-                crate::i18n::t("status.no_peers"),
+            crate::audit::record(format!(
+                "net_relay event={} kind={:?} sent={} failed={}",
+                ev.event_id, ev.kind, sent, failed
             ));
+            tracing::warn!(
+                failed,
+                body_len,
+                "clipboard event not delivered to any peer"
+            );
+            let _ = self
+                .events
+                .send(NetEvent::Toast(crate::i18n::t("status.no_peers")));
         }
+        sent
     }
 
     pub async fn run(self: Arc<Self>, listen_addr: SocketAddr, mut shutdown: mpsc::Receiver<()>) {
         let listener = match TcpListener::bind(listen_addr).await {
             Ok(l) => {
                 tracing::info!(%listen_addr, "TCP listening");
-                let _ = self.events.send(NetEvent::Status(crate::i18n::t("status.ready")));
+                let _ = self
+                    .events
+                    .send(NetEvent::Status(crate::i18n::t("status.ready")));
                 l
             }
             Err(e) => {
@@ -605,7 +695,9 @@ impl NetworkHub {
                         Ok((stream, addr)) => {
                             let hub = Arc::clone(&self);
                             self.rt.spawn(async move {
+                                crate::audit::record(format!("net_inbound_start addr={addr}"));
                                 if let Err(e) = hub.handle_connection(stream, addr, false).await {
+                                    crate::audit::record(format!("net_inbound_error addr={} error={}", addr, e));
                                     tracing::debug!(%addr, error = %e, "inbound ended");
                                 }
                             });
@@ -669,9 +761,14 @@ impl NetworkHub {
         if !self.connecting.lock().insert(remote_id) {
             return;
         }
+        crate::audit::record(format!("net_dial_start peer={} addr={}", remote_id, addr));
         let result = self.dial_addr_as(remote_id, addr).await;
         self.connecting.lock().remove(&remote_id);
         if let Err(e) = result {
+            crate::audit::record(format!(
+                "net_dial_error peer={} addr={} error={}",
+                remote_id, addr, e
+            ));
             tracing::debug!(%remote_id, %addr, error = %e, "force_dial finished with error");
             let msg = e.to_string();
             // Auth failures already emitted PeerAuthFailed + toast via that path.
@@ -681,9 +778,7 @@ impl NetworkHub {
                     &[("addr", &addr.to_string())],
                 )));
             }
-            let _ = self
-                .events
-                .send(NetEvent::Status(self.status_summary()));
+            let _ = self.events.send(NetEvent::Status(self.status_summary()));
         }
     }
 
@@ -746,11 +841,7 @@ impl NetworkHub {
             }
         };
 
-        if let Err(e) = self
-            .clone()
-            .handle_connection(stream, addr, true)
-            .await
-        {
+        if let Err(e) = self.clone().handle_connection(stream, addr, true).await {
             self.upsert_meta(
                 remote_id,
                 remote_id.to_string(),
@@ -770,6 +861,10 @@ impl NetworkHub {
         conn_addr: SocketAddr,
         we_dialed: bool,
     ) -> Result<()> {
+        crate::audit::record(format!(
+            "net_handshake_start addr={} dialed={}",
+            conn_addr, we_dialed
+        ));
         // Insecure default password: refuse both dial and accept so two fresh installs cannot pair.
         self.refuse_if_insecure()?;
 
@@ -891,6 +986,10 @@ impl NetworkHub {
                 },
             );
         }
+        crate::audit::record(format!(
+            "net_session_ready peer={} addr={} dialed={}",
+            remote_id, peer_listen_addr, we_dialed
+        ));
 
         self.upsert_meta(
             remote_id,
@@ -910,9 +1009,7 @@ impl NetworkHub {
             "status.session_ok",
             &[("name", &remote_name)],
         )));
-        let _ = self
-            .events
-            .send(NetEvent::Status(self.status_summary()));
+        let _ = self.events.send(NetEvent::Status(self.status_summary()));
 
         // For disconnect / ignore checks use listen addr.
         let addr = peer_listen_addr;
@@ -981,6 +1078,14 @@ impl NetworkHub {
                             let mut eng = self.engine.lock();
                             eng.on_remote_event(&ev)
                         };
+                        crate::audit::record(format!(
+                            "net_receive event={} kind={:?} file={:?} bytes={} apply={}",
+                            ev.event_id,
+                            ev.kind,
+                            ev.file_name,
+                            ev.payload.len(),
+                            apply
+                        ));
                         if apply {
                             self.relay_clipboard(&ev, Some(remote_id));
                             let _ = self.events.send(NetEvent::ClipboardFromRemote(ev));
@@ -1018,6 +1123,10 @@ impl NetworkHub {
         heartbeat.abort();
         write_task.abort();
         self.live.lock().remove(&remote_id);
+        crate::audit::record(format!(
+            "net_session_closed peer={} addr={} error={:?}",
+            remote_id, addr, read_result
+        ));
         self.connecting.lock().remove(&remote_id);
         self.connecting_addrs.lock().remove(&conn_addr);
         self.connecting_addrs.lock().remove(&addr);
@@ -1044,9 +1153,7 @@ impl NetworkHub {
                 &[("name", &remote_name)],
             )));
         }
-        let _ = self
-            .events
-            .send(NetEvent::Status(self.status_summary()));
+        let _ = self.events.send(NetEvent::Status(self.status_summary()));
         read_result
     }
 
@@ -1205,7 +1312,10 @@ fn check_auth_identity(r: &AuthResponse, remote_id: Uuid, remote_name: &str) -> 
             "{}",
             crate::i18n::t_args(
                 "status.auth_device_name",
-                &[("a", &format!("{:?}", r.device_name)), ("b", &format!("{:?}", remote_name))],
+                &[
+                    ("a", &format!("{:?}", r.device_name)),
+                    ("b", &format!("{:?}", remote_name))
+                ],
             )
         );
     }
@@ -1253,9 +1363,7 @@ async fn read_raw_timeout_max<R: AsyncReadExt + Unpin>(
         .context("read frame length")?;
     let len = u32::from_le_bytes(len_buf) as usize;
     if len > max_frame {
-        return Err(anyhow::anyhow!(
-            "frame too large: {len} > max {max_frame}"
-        ));
+        return Err(anyhow::anyhow!("frame too large: {len} > max {max_frame}"));
     }
     if len == 0 {
         return Ok(Vec::new());
@@ -1274,9 +1382,7 @@ async fn read_raw_timeout_max<R: AsyncReadExt + Unpin>(
         Ok::<(), std::io::Error>(())
     })
     .await
-    .map_err(|_| {
-        anyhow::anyhow!("read timeout (body {len} bytes, {:?})", body_timeout)
-    })?
+    .map_err(|_| anyhow::anyhow!("read timeout (body {len} bytes, {:?})", body_timeout))?
     .context("read frame body")?;
     Ok(body)
 }
@@ -1294,7 +1400,6 @@ async fn read_message_timeout<R: AsyncReadExt + Unpin>(
     timeout: Duration,
 ) -> Result<Message> {
     // Handshake messages are small — never allocate multi-hundred-MiB buffers.
-    let body =
-        read_raw_timeout_max(r, timeout, |_| timeout, MAX_HANDSHAKE_FRAME_BYTES).await?;
+    let body = read_raw_timeout_max(r, timeout, |_| timeout, MAX_HANDSHAKE_FRAME_BYTES).await?;
     Ok(Message::decode(&body)?)
 }

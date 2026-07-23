@@ -1,18 +1,18 @@
+use anyhow::Result;
+use eframe::egui;
 use ohmycopy::clients::{ClientSource, ClientsFile};
 use ohmycopy::clipboard::{
     png_to_rgba, rgba_to_png, spawn_clipboard_watcher, ClipContent, ClipboardService,
 };
-use ohmycopy::inbox::{self, MIME_DIR_ZIP, MIME_MULTI_PATHS_ZIP};
-use ohmycopy::protocol::ContentKind;
 use ohmycopy::config::Config;
 use ohmycopy::engine::{EngineCore, SharedEngine};
 use ohmycopy::history::HistoryStore;
+use ohmycopy::inbox::{self, MIME_DIR_ZIP, MIME_MULTI_PATHS_ZIP};
 use ohmycopy::net::discover::DiscoveryService;
 use ohmycopy::net::tcp::{NetEvent, NetworkHub};
+use ohmycopy::protocol::ContentKind;
 use ohmycopy::tray::{self, AppTray, TrayAction};
 use ohmycopy::ui::{NearbyDevice, OhMyCopyApp, UiState};
-use anyhow::Result;
-use eframe::egui;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -90,6 +90,11 @@ pub fn run() -> Result<()> {
 /// discovery, clipboard watcher). Only the presentation surface forks later:
 /// `run_gui` vs `run_headless`. Keep sync/network/config behavior identical.
 pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
+    ohmycopy::audit::record(format!(
+        "app_start pid={} data_dir={}",
+        std::process::id(),
+        Config::data_dir()?.display()
+    ));
     // Language: config → system locale → English (built-in base is English).
     let lang = ohmycopy::i18n::init_from_config(&cfg_snap.language);
     tracing::info!(language = %lang, "i18n ready");
@@ -129,7 +134,8 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
     initial_ui.auto_start = cfg_snap.auto_start;
     initial_ui.language = lang;
     initial_ui.history = history.lock().list("", 100).unwrap_or_default();
-    initial_ui.status_line = ohmycopy::i18n::t_args("app.local_device", &[("name", &cfg_snap.device_name)]);
+    initial_ui.status_line =
+        ohmycopy::i18n::t_args("app.local_device", &[("name", &cfg_snap.device_name)]);
     let ui_shared = Arc::new(Mutex::new(initial_ui));
 
     // Keep OS login item in sync with config (e.g. after migrate / manual json edit).
@@ -164,14 +170,12 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
         Arc::new(Mutex::new(HashMap::new()));
     {
         let mut cf = clients.lock();
-        if !cfg_snap.manual_peers.is_empty() {
-            if cf.import_manual_peers(&cfg_snap.manual_peers) {
-                let _ = cf.save();
-                // Clear migrated peers from config.json
-                let mut cfg = config.lock();
-                cfg.manual_peers.clear();
-                let _ = cfg.save();
-            }
+        if !cfg_snap.manual_peers.is_empty() && cf.import_manual_peers(&cfg_snap.manual_peers) {
+            let _ = cf.save();
+            // Clear migrated peers from config.json
+            let mut cfg = config.lock();
+            cfg.manual_peers.clear();
+            let _ = cfg.save();
         }
         apply_clients(&hub, &cf);
         if let Some(mut u) = ui_shared.try_lock() {
@@ -203,11 +207,8 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
         // Seed unicast discovery targets from clients.json (helps when broadcast is blocked).
         {
             let cf = clients.lock();
-            let addrs: Vec<SocketAddr> = cf
-                .clients
-                .iter()
-                .filter_map(|c| c.socket_addr())
-                .collect();
+            let addrs: Vec<SocketAddr> =
+                cf.clients.iter().filter_map(|c| c.socket_addr()).collect();
             // known_targets is tokio RwLock — set via blocking write after spawn.
             let kt = Arc::clone(&known_targets);
             rt_handle.spawn(async move {
@@ -307,6 +308,10 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                 u.toast = Some(ohmycopy::i18n::t("toast.text_received"));
                             }
                             ContentKind::File => {
+                                ohmycopy::audit::record(format!(
+                                    "app_receive_file event={} name={:?} mime={} bytes={}",
+                                    ev.event_id, ev.file_name, ev.mime, ev.payload.len()
+                                ));
                                 if ev.mime == MIME_MULTI_PATHS_ZIP {
                                     let paths = match inbox::store_multi_paths_zip(&ev.event_id.to_string()[..8], &ev.payload) {
                                         Ok(paths) => paths,
@@ -374,50 +379,26 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                     }
                                 };
 
-                                // Prefer bitmap paste for image files (WeChat etc. expect image, not path).
-                                let looks_img = !is_folder
-                                    && dest
-                                        .extension()
-                                        .and_then(|e| e.to_str())
-                                        .map(|e| {
-                                            matches!(
-                                                e.to_ascii_lowercase().as_str(),
-                                                "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"
-                                            )
-                                        })
-                                        .unwrap_or(false);
-                                if looks_img {
-                                    match std::fs::read(&dest)
-                                        .ok()
-                                        .and_then(|b| image::load_from_memory(&b).ok())
-                                    {
-                                        Some(img) => {
-                                            let rgba = img.to_rgba8();
-                                            let (w, h) = rgba.dimensions();
-                                            if let Err(e) =
-                                                clip.set_image_from_sync(w, h, rgba.into_raw())
-                                            {
-                                                tracing::warn!(error = %e, "set image from file");
-                                                let _ = clip.set_files_from_sync(&[dest.clone()]);
-                                            }
-                                        }
-                                        None => {
-                                            if let Err(e) =
-                                                clip.set_files_from_sync(&[dest.clone()])
-                                            {
-                                                tracing::warn!(error = %e, "set clipboard files");
-                                                ui_s.lock().toast = Some(ohmycopy::i18n::t_args(
-                                                    "toast.file_clip_fail",
-                                                    &[("error", &e.to_string())],
-                                                ));
-                                            }
-                                        }
-                                    }
-                                } else if let Err(e) = clip.set_files_from_sync(&[dest.clone()]) {
+                                // File events always restore a file-list clipboard entry.  Do
+                                // not convert image files into bitmap data: Explorer users expect
+                                // a copied .png/.jpg to paste as a file.
+                                if let Err(e) =
+                                    clip.set_files_from_sync(std::slice::from_ref(&dest))
+                                {
+                                    ohmycopy::audit::record(format!(
+                                        "app_receive_file_clipboard event={} result=err error={}",
+                                        ev.event_id, e
+                                    ));
                                     tracing::warn!(error = %e, "set clipboard files");
                                     ui_s.lock().toast = Some(ohmycopy::i18n::t_args(
                                         "toast.file_clip_fail",
                                         &[("error", &e.to_string())],
+                                    ));
+                                }
+                                else {
+                                    ohmycopy::audit::record(format!(
+                                        "app_receive_file_clipboard event={} result=ok dest={}",
+                                        ev.event_id, dest.display()
                                     ));
                                 }
                                 // Pass base name only — history layer formats the list title.
@@ -428,25 +409,14 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                 };
                                 let preview = {
                                     let h = hist.lock();
-                                    if looks_img && !is_folder {
-                                        let _ = h.insert_image(
-                                            ev.event_id,
-                                            ev.source_id,
-                                            &display_name,
-                                            &dest.to_string_lossy(),
-                                            ev.payload.len() as u64,
-                                            ev.created_at,
-                                        );
-                                    } else {
-                                        let _ = h.insert_file(
-                                            ev.event_id,
-                                            ev.source_id,
-                                            &list_name,
-                                            &dest.to_string_lossy(),
-                                            ev.payload.len() as u64,
-                                            ev.created_at,
-                                        );
-                                    }
+                                    let _ = h.insert_file(
+                                        ev.event_id,
+                                        ev.source_id,
+                                        &list_name,
+                                        &dest.to_string_lossy(),
+                                        ev.payload.len() as u64,
+                                        ev.created_at,
+                                    );
                                     h.list("", 100).unwrap_or_default()
                                 };
                                 let mut u = ui_s.lock();
@@ -543,13 +513,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                 .remove(&device_id)
                                 .or_else(|| by_addr.remove(&addr))
                         };
-                        let source = trial
-                            .map(|p| p.source)
-                            .unwrap_or(if we_dialed {
-                                ClientSource::Discover
-                            } else {
-                                ClientSource::Discover
-                            });
+                        let source = trial.map(|p| p.source).unwrap_or(ClientSource::Discover);
                         {
                             let mut cf = clients_e.lock();
                             cf.add_paired(Some(device_id), name.clone(), addr, source);
@@ -677,7 +641,9 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                 let Ok(path) = ClientsFile::path() else {
                     continue;
                 };
-                let mtime = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
+                let mtime = std::fs::metadata(&path)
+                    .ok()
+                    .and_then(|m| m.modified().ok());
                 if mtime == last_mtime {
                     continue;
                 }
@@ -723,6 +689,11 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                             core.on_local_text(&text)
                         };
                         if let Some(ev) = ev {
+                            ohmycopy::audit::record(format!(
+                                "app_local_text event={} bytes={}",
+                                ev.event_id,
+                                ev.payload.len()
+                            ));
                             let preview = {
                                 let h = hist.lock();
                                 let _ = h.insert_text(ev.event_id, local_id, &text, ev.created_at);
@@ -744,8 +715,10 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                         let png = match rgba_to_png(width, height, &rgba) {
                             Ok(p) => p,
                             Err(e) => {
-                                ui_c.lock().toast =
-                                    Some(ohmycopy::i18n::t_args("toast.image_process_fail", &[("error", &e.to_string())]));
+                                ui_c.lock().toast = Some(ohmycopy::i18n::t_args(
+                                    "toast.image_process_fail",
+                                    &[("error", &e.to_string())],
+                                ));
                                 return;
                             }
                         };
@@ -769,6 +742,11 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                             core.on_local_image(png.clone(), Some(fname.clone()))
                         };
                         if let Some(ev) = ev {
+                            ohmycopy::audit::record(format!(
+                                "app_local_image event={} bytes={}",
+                                ev.event_id,
+                                ev.payload.len()
+                            ));
                             // Keep a local copy for history re-copy.
                             let path_str = match inbox::store_file(
                                 &ev.event_id.to_string()[..8],
@@ -812,7 +790,10 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                             let (wire_name, bytes, mime) = match inbox::pack_paths(&paths, max) {
                                 Ok(payload) => payload,
                                 Err(e) => {
-                                    ui_c.lock().toast = Some(ohmycopy::i18n::t_args("toast.file_read_fail", &[("error", &e.to_string())]));
+                                    ui_c.lock().toast = Some(ohmycopy::i18n::t_args(
+                                        "toast.file_read_fail",
+                                        &[("error", &e.to_string())],
+                                    ));
                                     return;
                                 }
                             };
@@ -825,12 +806,22 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                             if let Some(ev) = ev {
                                 let preview = {
                                     let h = hist.lock();
-                                    let _ = h.insert_file(ev.event_id, local_id, &format!("{count} items"), &paths[0].parent().unwrap_or(&paths[0]).to_string_lossy(), size, ev.created_at);
+                                    let _ = h.insert_file(
+                                        ev.event_id,
+                                        local_id,
+                                        &format!("{count} items"),
+                                        &paths[0].parent().unwrap_or(&paths[0]).to_string_lossy(),
+                                        size,
+                                        ev.created_at,
+                                    );
                                     h.list("", 100).unwrap_or_default()
                                 };
                                 let mut u = ui_c.lock();
                                 u.history = preview;
-                                u.toast = Some(ohmycopy::i18n::t_args("toast.files_synced", &[("count", &count)]));
+                                u.toast = Some(ohmycopy::i18n::t_args(
+                                    "toast.files_synced",
+                                    &[("count", &count)],
+                                ));
                                 hub_c.broadcast_clipboard(ev);
                             }
                             return;
@@ -840,8 +831,10 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                             let (wire_name, bytes, mime) = match inbox::pack_path(&path, max) {
                                 Ok(t) => t,
                                 Err(e) => {
-                                    ui_c.lock().toast =
-                                        Some(ohmycopy::i18n::t_args("toast.file_read_fail", &[("error", &e.to_string())]));
+                                    ui_c.lock().toast = Some(ohmycopy::i18n::t_args(
+                                        "toast.file_read_fail",
+                                        &[("error", &e.to_string())],
+                                    ));
                                     continue;
                                 }
                             };
@@ -857,18 +850,25 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                     }
                                 });
                             // For folders, store original folder name in file_name (wire is .zip).
-                            let event_file_name = if is_dir {
-                                base_name.clone()
-                            } else {
-                                wire_name
-                            };
+                            let event_file_name =
+                                if is_dir { base_name.clone() } else { wire_name };
                             let ev = {
                                 let mut core = eng.lock();
                                 core.on_local_file(&event_file_name, bytes, mime)
                             };
                             if let Some(ev) = ev {
+                                ohmycopy::audit::record(format!(
+                                    "app_local_file event={} name={} mime={} bytes={} emitted=true",
+                                    ev.event_id,
+                                    event_file_name,
+                                    ev.mime,
+                                    ev.payload.len()
+                                ));
                                 let list_name = if is_dir {
-                                    ohmycopy::i18n::t_args("toast.folder_label", &[("name", &base_name)])
+                                    ohmycopy::i18n::t_args(
+                                        "toast.folder_label",
+                                        &[("name", &base_name)],
+                                    )
                                 } else {
                                     base_name.clone()
                                 };
@@ -888,12 +888,23 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                     let mut u = ui_c.lock();
                                     u.history = preview;
                                     u.toast = Some(if is_dir {
-                                        ohmycopy::i18n::t_args("toast.folder_synced", &[("name", &base_name)])
+                                        ohmycopy::i18n::t_args(
+                                            "toast.folder_synced",
+                                            &[("name", &base_name)],
+                                        )
                                     } else {
-                                        ohmycopy::i18n::t_args("toast.file_synced", &[("name", &base_name)])
+                                        ohmycopy::i18n::t_args(
+                                            "toast.file_synced",
+                                            &[("name", &base_name)],
+                                        )
                                     });
                                 }
                                 hub_c.broadcast_clipboard(ev);
+                            } else {
+                                ohmycopy::audit::record(format!(
+                                    "app_local_file name={} emitted=false",
+                                    event_file_name
+                                ));
                             }
                         }
                     }
@@ -949,7 +960,10 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                             cfg.save()
                         };
                         if let Err(e) = save_result {
-                            ui_s.lock().toast = Some(ohmycopy::i18n::t_args("toast.save_fail", &[("error", &e.to_string())]));
+                            ui_s.lock().toast = Some(ohmycopy::i18n::t_args(
+                                "toast.save_fail",
+                                &[("error", &e.to_string())],
+                            ));
                         } else {
                             eng.lock().max_payload_bytes = max_payload;
                             // Password can hot-reload for future handshakes; ports need restart.
@@ -960,22 +974,20 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                         if ohmycopy::config::Config::is_insecure_default_password(
                                             &password,
                                         ) {
-                                            notes.push(
-                                                ohmycopy::i18n::t("toast.password_insecure"),
-                                            );
+                                            notes
+                                                .push(ohmycopy::i18n::t("toast.password_insecure"));
                                         } else {
-                                            notes.push(
-                                                ohmycopy::i18n::t("toast.password_updated"),
-                                            );
+                                            notes.push(ohmycopy::i18n::t("toast.password_updated"));
                                         }
                                     }
-                                    Err(e) => notes.push(ohmycopy::i18n::t_args("toast.password_update_fail", &[("error", &e.to_string())])),
+                                    Err(e) => notes.push(ohmycopy::i18n::t_args(
+                                        "toast.password_update_fail",
+                                        &[("error", &e.to_string())],
+                                    )),
                                 }
                             }
                             if port_changed {
-                                notes.push(
-                                    ohmycopy::i18n::t("toast.port_restart"),
-                                );
+                                notes.push(ohmycopy::i18n::t("toast.port_restart"));
                             }
                             if auto_changed || auto_start {
                                 match ohmycopy::autostart::apply(auto_start) {
@@ -984,7 +996,10 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                     } else {
                                         ohmycopy::i18n::t("toast.autostart_off")
                                     }),
-                                    Err(e) => notes.push(ohmycopy::i18n::t_args("toast.autostart_fail", &[("error", &e.to_string())])),
+                                    Err(e) => notes.push(ohmycopy::i18n::t_args(
+                                        "toast.autostart_fail",
+                                        &[("error", &e.to_string())],
+                                    )),
                                 }
                             }
                             if notes.is_empty() {
@@ -1029,8 +1044,10 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                             cf.remove(device_id, &addr.to_string());
                             let _ = cf.save();
                             ui_s.lock().saved_clients = cf.clients.clone();
-                            ui_s.lock().toast =
-                                Some(ohmycopy::i18n::t_args("toast.device_removed", &[("addr", &addr.to_string())]));
+                            ui_s.lock().toast = Some(ohmycopy::i18n::t_args(
+                                "toast.device_removed",
+                                &[("addr", &addr.to_string())],
+                            ));
                         }
                         hub_c.remove_client(device_id, addr); // notifies + disconnects
                         hub_c.set_ignored(device_id, addr, false);
@@ -1047,29 +1064,34 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                             }
                             ui_s.lock().saved_clients = cf.clients.clone();
                             ui_s.lock().toast = Some(if ignored {
-                                ohmycopy::i18n::t_args("toast.ignore_on", &[("addr", &addr.to_string())])
+                                ohmycopy::i18n::t_args(
+                                    "toast.ignore_on",
+                                    &[("addr", &addr.to_string())],
+                                )
                             } else {
-                                ohmycopy::i18n::t_args("toast.ignore_off", &[("addr", &addr.to_string())])
+                                ohmycopy::i18n::t_args(
+                                    "toast.ignore_off",
+                                    &[("addr", &addr.to_string())],
+                                )
                             });
                         }
                         hub_c.set_ignored(device_id, addr, ignored);
                     }
-                    UiCommand::ReloadClients => {
-                        match ClientsFile::load_or_create() {
-                            Ok(fresh) => {
-                                apply_clients(&hub_c, &fresh);
-                                let mut cf = clients_c.lock();
-                                *cf = fresh;
-                                ui_s.lock().saved_clients = cf.clients.clone();
-                                ui_s.lock().toast =
-                                    Some(ohmycopy::i18n::t("toast.clients_refreshed"));
-                            }
-                            Err(e) => {
-                                ui_s.lock().toast =
-                                    Some(ohmycopy::i18n::t_args("toast.clients_refresh_fail", &[("error", &e.to_string())]));
-                            }
+                    UiCommand::ReloadClients => match ClientsFile::load_or_create() {
+                        Ok(fresh) => {
+                            apply_clients(&hub_c, &fresh);
+                            let mut cf = clients_c.lock();
+                            *cf = fresh;
+                            ui_s.lock().saved_clients = cf.clients.clone();
+                            ui_s.lock().toast = Some(ohmycopy::i18n::t("toast.clients_refreshed"));
                         }
-                    }
+                        Err(e) => {
+                            ui_s.lock().toast = Some(ohmycopy::i18n::t_args(
+                                "toast.clients_refresh_fail",
+                                &[("error", &e.to_string())],
+                            ));
+                        }
+                    },
                     UiCommand::ClearHistory => {
                         let hist_ok = hist.lock().clear().is_ok();
                         let inbox_res = inbox::clear_all();
@@ -1077,15 +1099,15 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                         u.history.clear();
                         u.toast = Some(match (hist_ok, inbox_res) {
                             (true, Ok(())) => ohmycopy::i18n::t("toast.history_cleared"),
-                            (true, Err(e)) => {
-                                ohmycopy::i18n::t_args("toast.history_clear_inbox_fail", &[("error", &e.to_string())])
-                            }
-                            (false, Ok(())) => {
-                                ohmycopy::i18n::t("toast.inbox_clear_history_fail")
-                            }
-                            (false, Err(e)) => {
-                                ohmycopy::i18n::t_args("toast.clear_fail", &[("error", &e.to_string())])
-                            }
+                            (true, Err(e)) => ohmycopy::i18n::t_args(
+                                "toast.history_clear_inbox_fail",
+                                &[("error", &e.to_string())],
+                            ),
+                            (false, Ok(())) => ohmycopy::i18n::t("toast.inbox_clear_history_fail"),
+                            (false, Err(e)) => ohmycopy::i18n::t_args(
+                                "toast.clear_fail",
+                                &[("error", &e.to_string())],
+                            ),
                         });
                     }
                     UiCommand::SetLanguage(code) => {
@@ -1141,7 +1163,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                 }
                             } else {
                                 // Prefer real file-list MIME; if OS rejects, fall back to path text.
-                                match clip.set_files_from_sync(&[path.clone()]) {
+                                match clip.set_files_from_sync(std::slice::from_ref(&path)) {
                                     Ok(()) => Ok(ohmycopy::i18n::t("toast.copied")),
                                     Err(e) => {
                                         tracing::warn!(
@@ -1171,7 +1193,12 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                         };
                         match result {
                             Ok(msg) => ui_s.lock().toast = Some(msg),
-                            Err(e) => ui_s.lock().toast = Some(ohmycopy::i18n::t_args("toast.copy_fail", &[("error", &e.to_string())])),
+                            Err(e) => {
+                                ui_s.lock().toast = Some(ohmycopy::i18n::t_args(
+                                    "toast.copy_fail",
+                                    &[("error", &e.to_string())],
+                                ))
+                            }
                         }
                     }
                     UiCommand::SetSync(enabled) => {
@@ -1242,7 +1269,7 @@ fn run_headless(
         std::thread::Builder::new()
             .name("ohmycopy-ctrlc".into())
             .spawn(move || {
-                let _ = ctrlc_wait();
+                ctrlc_wait();
                 stop_c.store(true, Ordering::SeqCst);
             })
             .ok();
@@ -1253,10 +1280,7 @@ fn run_headless(
     println!("====================================================");
     println!(
         " {}",
-        ohmycopy::i18n::t_args(
-            "headless.title",
-            &[("version", env!("CARGO_PKG_VERSION"))],
-        )
+        ohmycopy::i18n::t_args("headless.title", &[("version", env!("CARGO_PKG_VERSION"))],)
     );
     // Warn early when OS clipboard cannot be opened (typical Linux SSH/service).
     match ohmycopy::clipboard::probe_clipboard_available() {
@@ -1265,15 +1289,9 @@ fn run_headless(
         }
         Err(e) => {
             println!("  clipboard : UNAVAILABLE — {e}");
-            println!(
-                "  tip       : network sync/relay still works; local paste needs a desktop"
-            );
-            println!(
-                "              session. Try: export DISPLAY=:0  and/or  apt install xclip"
-            );
-            println!(
-                "              Received text is also saved under ~/.ohmycopy/last_clip/"
-            );
+            println!("  tip       : network sync/relay still works; local paste needs a desktop");
+            println!("              session. Try: export DISPLAY=:0  and/or  apt install xclip");
+            println!("              Received text is also saved under ~/.ohmycopy/last_clip/");
         }
     }
     println!("----------------------------------------------------");
@@ -1287,10 +1305,7 @@ fn run_headless(
     );
     println!(
         " {}",
-        ohmycopy::i18n::t_args(
-            "headless.listen",
-            &[("port", &cfg.tcp_port.to_string())],
-        )
+        ohmycopy::i18n::t_args("headless.listen", &[("port", &cfg.tcp_port.to_string())],)
     );
     let sync_state = if cfg.sync_enabled {
         ohmycopy::i18n::t("headless.on")
@@ -1326,7 +1341,7 @@ fn run_headless(
     while !stop.load(Ordering::SeqCst) && !shutdown_flag.load(Ordering::SeqCst) {
         std::thread::sleep(Duration::from_secs(2));
         tick += 1;
-        if tick % 5 == 0 {
+        if tick.is_multiple_of(5) {
             // every ~10s
             let summary = hub.status_summary();
             let n = hub.connected_count();
@@ -1426,19 +1441,13 @@ fn select_wgpu_adapter(
     adapters: &[eframe::wgpu::Adapter],
     surface: Option<&eframe::wgpu::Surface<'_>>,
 ) -> Result<eframe::wgpu::Adapter, String> {
-    let compatible = |a: &eframe::wgpu::Adapter| {
-        surface
-            .map(|s| a.is_surface_supported(s))
-            .unwrap_or(true)
-    };
+    let compatible =
+        |a: &eframe::wgpu::Adapter| surface.map(|s| a.is_surface_supported(s)).unwrap_or(true);
 
     let mut infos: Vec<String> = Vec::new();
     for a in adapters {
         let i = a.get_info();
-        infos.push(format!(
-            "{} ({:?}/{:?})",
-            i.name, i.backend, i.device_type
-        ));
+        infos.push(format!("{} ({:?}/{:?})", i.name, i.backend, i.device_type));
     }
     tracing::info!(adapters = ?infos, "wgpu adapters");
 
@@ -1460,19 +1469,13 @@ fn select_wgpu_adapter(
     #[cfg(windows)]
     {
         for a in adapters {
-            if a.get_info().backend == eframe::wgpu::Backend::Dx12
-                && is_gpu(a)
-                && compatible(a)
-            {
+            if a.get_info().backend == eframe::wgpu::Backend::Dx12 && is_gpu(a) && compatible(a) {
                 tracing::info!(name = %a.get_info().name, backend = "dx12", "selected GPU adapter");
                 return Ok(a.clone());
             }
         }
         for a in adapters {
-            if a.get_info().backend == eframe::wgpu::Backend::Dx12
-                && is_soft(a)
-                && compatible(a)
-            {
+            if a.get_info().backend == eframe::wgpu::Backend::Dx12 && is_soft(a) && compatible(a) {
                 tracing::info!(name = %a.get_info().name, backend = "dx12", "selected WARP adapter");
                 return Ok(a.clone());
             }
@@ -1531,51 +1534,52 @@ fn run_gui(
     if start_hidden {
         tray::spawn_startup_hide_guard(tray::WINDOW_TITLE);
     }
-    let make_app = |ui_state: UiState, shared: Arc<Mutex<UiState>>, tx: mpsc::UnboundedSender<UiCommand>| {
-        move |cc: &eframe::CreationContext<'_>| {
-            let true_quit = Arc::new(AtomicBool::new(false));
-            let sync0 = ui_state.sync_enabled;
-            let start_min = ui_state.start_minimized_to_tray;
-            let tray = match AppTray::new(sync0, Arc::clone(&true_quit)) {
-                Ok(t) => {
-                    // Apply sync from tray menu immediately (engine loop), even if
-                    // egui `update` is suspended while the window is hidden.
-                    let tx_sync = tx.clone();
-                    let shared_sync = Arc::clone(&shared);
-                    t.set_on_sync(Arc::new(move |enabled: bool| {
-                        if let Some(mut u) = shared_sync.try_lock() {
-                            u.sync_enabled = enabled;
-                        }
-                        let _ = tx_sync.send(UiCommand::SetSync(enabled));
-                    }));
-                    Some(t)
+    let make_app =
+        |ui_state: UiState, shared: Arc<Mutex<UiState>>, tx: mpsc::UnboundedSender<UiCommand>| {
+            move |cc: &eframe::CreationContext<'_>| {
+                let true_quit = Arc::new(AtomicBool::new(false));
+                let sync0 = ui_state.sync_enabled;
+                let start_min = ui_state.start_minimized_to_tray;
+                let tray = match AppTray::new(sync0, Arc::clone(&true_quit)) {
+                    Ok(t) => {
+                        // Apply sync from tray menu immediately (engine loop), even if
+                        // egui `update` is suspended while the window is hidden.
+                        let tx_sync = tx.clone();
+                        let shared_sync = Arc::clone(&shared);
+                        t.set_on_sync(Arc::new(move |enabled: bool| {
+                            if let Some(mut u) = shared_sync.try_lock() {
+                                u.sync_enabled = enabled;
+                            }
+                            let _ = tx_sync.send(UiCommand::SetSync(enabled));
+                        }));
+                        Some(t)
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "system tray unavailable");
+                        None
+                    }
+                };
+                // Hide as early as CreationContext (before first paint when possible).
+                if start_min {
+                    cc.egui_ctx
+                        .send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                    cc.egui_ctx
+                        .send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+                            -32000.0, -32000.0,
+                        )));
+                    let _ = tray::win32_set_window_visible_quiet(tray::WINDOW_TITLE, false);
                 }
-                Err(e) => {
-                    tracing::warn!(error = %e, "system tray unavailable");
-                    None
-                }
-            };
-            // Hide as early as CreationContext (before first paint when possible).
-            if start_min {
-                cc.egui_ctx
-                    .send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                cc.egui_ctx
-                    .send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
-                        -32000.0, -32000.0,
-                    )));
-                let _ = tray::win32_set_window_visible_quiet(tray::WINDOW_TITLE, false);
+                Ok(Box::new(AppShell {
+                    inner: OhMyCopyApp::new(cc, ui_state),
+                    ui_shared: shared,
+                    cmd_tx: tx,
+                    tray,
+                    true_quit,
+                    // Keep re-hiding for several frames (backends re-show during init).
+                    hide_on_start_frames: if start_min { 30 } else { 0 },
+                }) as Box<dyn eframe::App>)
             }
-            Ok(Box::new(AppShell {
-                inner: OhMyCopyApp::new(cc, ui_state),
-                ui_shared: shared,
-                cmd_tx: tx,
-                tray,
-                true_quit,
-                // Keep re-hiding for several frames (backends re-show during init).
-                hide_on_start_frames: if start_min { 30 } else { 0 },
-            }) as Box<dyn eframe::App>)
-        }
-    };
+        };
 
     // --- Attempt 1: wgpu (DX12 / WARP / Vulkan) ---
     {
@@ -1668,7 +1672,10 @@ struct AppShell {
     hide_on_start_frames: u32,
 }
 
-fn peers_eq(a: &[ohmycopy::net::peer::PeerSnapshot], b: &[ohmycopy::net::peer::PeerSnapshot]) -> bool {
+fn peers_eq(
+    a: &[ohmycopy::net::peer::PeerSnapshot],
+    b: &[ohmycopy::net::peer::PeerSnapshot],
+) -> bool {
     a.len() == b.len()
         && a.iter().zip(b.iter()).all(|(x, y)| {
             x.device_id == y.device_id
@@ -1688,16 +1695,11 @@ fn nearby_eq(a: &[NearbyDevice], b: &[NearbyDevice]) -> bool {
             .all(|(x, y)| x.name == y.name && x.device_id == y.device_id && x.addr == y.addr)
 }
 
-fn history_eq(
-    a: &[ohmycopy::history::HistoryItem],
-    b: &[ohmycopy::history::HistoryItem],
-) -> bool {
+fn history_eq(a: &[ohmycopy::history::HistoryItem], b: &[ohmycopy::history::HistoryItem]) -> bool {
     a.len() == b.len()
-        && a.iter()
-            .zip(b.iter())
-            .all(|(x, y)| {
-                x.event_id == y.event_id && x.preview == y.preview && x.content == y.content
-            })
+        && a.iter().zip(b.iter()).all(|(x, y)| {
+            x.event_id == y.event_id && x.preview == y.preview && x.content == y.content
+        })
 }
 
 impl eframe::App for AppShell {
@@ -1727,15 +1729,17 @@ impl eframe::App for AppShell {
 
         // --- Close to tray (X hides; tray "退出" quits) ---
         let want_quit = self.true_quit.load(Ordering::SeqCst)
-            || self.tray.as_ref().map(|t| t.is_true_quit()).unwrap_or(false);
-        if ctx.input(|i| i.viewport().close_requested()) {
-            if !want_quit {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                tray::win32_set_window_visible(tray::WINDOW_TITLE, false);
-                if let Some(tray) = &self.tray {
-                    tray.set_sync_checked(self.inner.ui.sync_enabled);
-                }
+            || self
+                .tray
+                .as_ref()
+                .map(|t| t.is_true_quit())
+                .unwrap_or(false);
+        if ctx.input(|i| i.viewport().close_requested()) && !want_quit {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            tray::win32_set_window_visible(tray::WINDOW_TITLE, false);
+            if let Some(tray) = &self.tray {
+                tray.set_sync_checked(self.inner.ui.sync_enabled);
             }
         }
 
@@ -1885,7 +1889,10 @@ impl eframe::App for AppShell {
                     self.inner.ui.toast_ttl_frames = TOAST_FRAMES;
                 }
                 Err(e) => {
-                    self.inner.ui.toast = Some(ohmycopy::i18n::t_args("toast.data_folder_fail", &[("error", &e.to_string())]));
+                    self.inner.ui.toast = Some(ohmycopy::i18n::t_args(
+                        "toast.data_folder_fail",
+                        &[("error", &e.to_string())],
+                    ));
                     self.inner.ui.toast_ttl_frames = TOAST_FRAMES;
                 }
             }
@@ -1894,8 +1901,7 @@ impl eframe::App for AppShell {
             if let Ok(addr) = self.inner.ui.manual_addr.parse::<SocketAddr>() {
                 let _ = self.cmd_tx.send(UiCommand::AddManual(addr));
             } else {
-                self.inner.ui.toast =
-                    Some(ohmycopy::i18n::t("toast.bad_manual_addr"));
+                self.inner.ui.toast = Some(ohmycopy::i18n::t("toast.bad_manual_addr"));
                 self.inner.ui.toast_ttl_frames = TOAST_FRAMES;
             }
         }
@@ -1916,7 +1922,9 @@ impl eframe::App for AppShell {
         }
         if let Some((device_id, addr_str)) = self.inner.ui.cmd_remove_client.take() {
             if let Ok(addr) = addr_str.parse::<SocketAddr>() {
-                let _ = self.cmd_tx.send(UiCommand::RemoveClient { device_id, addr });
+                let _ = self
+                    .cmd_tx
+                    .send(UiCommand::RemoveClient { device_id, addr });
             } else {
                 self.inner.ui.toast = Some(ohmycopy::i18n::t("toast.bad_device_addr_short"));
                 self.inner.ui.toast_ttl_frames = TOAST_FRAMES;
@@ -1928,9 +1936,7 @@ impl eframe::App for AppShell {
                 // does not revert the optimistic UI flip before the async worker runs.
                 if let Some(mut s) = self.ui_shared.try_lock() {
                     for c in &mut s.saved_clients {
-                        if (device_id.is_some() && c.device_id == device_id)
-                            || c.addr == addr_str
-                        {
+                        if (device_id.is_some() && c.device_id == device_id) || c.addr == addr_str {
                             c.ignored = ignored;
                         }
                     }

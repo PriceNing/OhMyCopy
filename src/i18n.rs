@@ -154,11 +154,7 @@ pub fn available_languages() -> Vec<(String, String)> {
 }
 
 pub fn active_language() -> String {
-    state()
-        .read()
-        .expect("i18n lock")
-        .active_code
-        .clone()
+    state().read().expect("i18n lock").active_code.clone()
 }
 
 /// Switch active catalog. Returns false if code is unknown (stays on previous).
@@ -196,7 +192,7 @@ pub fn normalize_lang_code(code: &str) -> String {
     match s.as_str() {
         "zh" | "zh_cn" | "zh_hans" | "zh_sg" | "chs" | "chinese" => LANG_ZH_CN.into(),
         "en" | "en_us" | "en_gb" | "en_au" | "english" => LANG_EN.into(),
-        other if other.is_empty() => LANG_EN.into(),
+        "" => LANG_EN.into(),
         other => other.to_string(),
     }
 }
@@ -215,10 +211,7 @@ pub fn locale_to_lang_code(locale: &str) -> Option<String> {
         Some(norm)
     } else {
         // Try primary subtag only
-        let primary = base
-            .split(['_', '-'])
-            .next()
-            .unwrap_or(base);
+        let primary = base.split(['_', '-']).next().unwrap_or(base);
         let norm2 = normalize_lang_code(primary);
         if has_language(&norm2) {
             Some(norm2)
@@ -295,6 +288,31 @@ pub fn init_from_config(config_language: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    /// `I18nState` is process-global, so tests that change its active catalog
+    /// must not run concurrently.  Keep the lock for the entire test and put
+    /// the prior language back when it is dropped.
+    fn language_test_guard() -> LanguageTestGuard {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let lock = LOCK.get_or_init(|| Mutex::new(()));
+        let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        LanguageTestGuard {
+            _guard: guard,
+            previous: active_language(),
+        }
+    }
+
+    struct LanguageTestGuard {
+        _guard: MutexGuard<'static, ()>,
+        previous: String,
+    }
+
+    impl Drop for LanguageTestGuard {
+        fn drop(&mut self) {
+            let _ = set_language(&self.previous);
+        }
+    }
 
     #[test]
     fn parse_key_value_and_escape() {
@@ -326,6 +344,7 @@ multi=line\nbreak
 
     #[test]
     fn missing_key_falls_back_to_english() {
+        let _language_guard = language_test_guard();
         // Active may be zh; invent a key only in English path via t after ensure en has key.
         let _ = set_language(LANG_ZH_CN);
         let en_val = parse_lang(EMBEDDED_EN_US)
@@ -351,15 +370,13 @@ multi=line\nbreak
         let key = "settings.save";
         assert!(english.get(key).is_some());
         assert!(active.get(key).is_none());
-        let resolved = active
-            .get(key)
-            .or_else(|| english.get(key))
-            .unwrap();
+        let resolved = active.get(key).or_else(|| english.get(key)).unwrap();
         assert_eq!(resolved, english.get(key).unwrap());
     }
 
     #[test]
     fn t_args_replaces_placeholders() {
+        let _language_guard = language_test_guard();
         let _ = set_language(LANG_EN);
         let s = t_args("app.local_device", &[("name", "PC1")]);
         assert!(s.contains("PC1"), "{s}");
@@ -369,7 +386,10 @@ multi=line\nbreak
     #[test]
     fn locale_map_zh_and_en() {
         assert_eq!(locale_to_lang_code("zh-CN").as_deref(), Some(LANG_ZH_CN));
-        assert_eq!(locale_to_lang_code("zh_CN.UTF-8").as_deref(), Some(LANG_ZH_CN));
+        assert_eq!(
+            locale_to_lang_code("zh_CN.UTF-8").as_deref(),
+            Some(LANG_ZH_CN)
+        );
         assert_eq!(locale_to_lang_code("en_US").as_deref(), Some(LANG_EN));
         assert_eq!(locale_to_lang_code("en-GB").as_deref(), Some(LANG_EN));
         assert_eq!(locale_to_lang_code("C"), None);
@@ -397,6 +417,7 @@ multi=line\nbreak
 
     #[test]
     fn set_language_switches_catalog() {
+        let _language_guard = language_test_guard();
         assert!(set_language(LANG_ZH_CN));
         assert_eq!(active_language(), LANG_ZH_CN);
         let zh_save = t("settings.save");

@@ -99,22 +99,16 @@ impl ClientsFile {
     }
 
     pub fn load(path: &Path) -> Result<Self> {
-        let text = fs::read_to_string(path)
-            .with_context(|| format!("read clients {}", path.display()))?;
-        let mut file: ClientsFile =
-            serde_json::from_str(&text).context("parse clients.json")?;
+        let text =
+            fs::read_to_string(path).with_context(|| format!("read clients {}", path.display()))?;
+        let mut file: ClientsFile = serde_json::from_str(&text).context("parse clients.json")?;
         if file.version < CLIENTS_VERSION {
             file.version = CLIENTS_VERSION;
         }
         file.clients.retain(|c| c.socket_addr().is_some());
         for c in &mut file.clients {
             if c.name.trim().is_empty() {
-                c.name = c
-                    .addr
-                    .split(':')
-                    .next()
-                    .unwrap_or("client")
-                    .to_string();
+                c.name = c.addr.split(':').next().unwrap_or("client").to_string();
             }
             c.auto_connect = true;
         }
@@ -168,9 +162,11 @@ impl ClientsFile {
         source: ClientSource,
     ) -> bool {
         let addr_s = addr.to_string();
-        if let Some(existing) = self.clients.iter_mut().find(|c| {
-            (device_id.is_some() && c.device_id == device_id) || c.addr == addr_s
-        }) {
+        if let Some(existing) = self
+            .clients
+            .iter_mut()
+            .find(|c| (device_id.is_some() && c.device_id == device_id) || c.addr == addr_s)
+        {
             existing.name = name;
             existing.addr = addr_s;
             if device_id.is_some() {
@@ -197,9 +193,11 @@ impl ClientsFile {
 
     /// Toggle ignore: connection may stay, clipboard sync is muted both ways.
     pub fn set_ignored(&mut self, device_id: Option<Uuid>, addr: &str, ignored: bool) -> bool {
-        if let Some(c) = self.clients.iter_mut().find(|c| {
-            (device_id.is_some() && c.device_id == device_id) || c.addr == addr
-        }) {
+        if let Some(c) = self
+            .clients
+            .iter_mut()
+            .find(|c| (device_id.is_some() && c.device_id == device_id) || c.addr == addr)
+        {
             if c.ignored != ignored {
                 c.ignored = ignored;
                 return true;

@@ -72,9 +72,7 @@ fn history_preview_never_contains_windows_path() {
     let e = Uuid::new_v4();
     let s = Uuid::new_v4();
     let path = r"C:\Users\Administrator\AppData\Local\Temp\orca-paste-xxx.png";
-    store
-        .insert_image(e, s, path, path, 12345, 1)
-        .unwrap();
+    store.insert_image(e, s, path, path, 12345, 1).unwrap();
     let items = store.list("", 10).unwrap();
     assert_eq!(items.len(), 1);
     let img_tag = ohmycopy::i18n::t("history.tag_image");
@@ -151,8 +149,16 @@ fn inbox_pack_folder_then_store_roundtrip() {
     let (_name, bytes, mime) = inbox::pack_path(&root, 8 * 1024 * 1024).unwrap();
     assert_eq!(mime, MIME_DIR_ZIP);
     let out = inbox::store_folder_zip("ut", "pack-me", &bytes).unwrap();
-    assert_eq!(fs::read_to_string(out.join("top.txt")).unwrap(), "top-level");
-    assert_eq!(fs::metadata(out.join("deep").join("inner.bin")).unwrap().len(), 4096);
+    assert_eq!(
+        fs::read_to_string(out.join("top.txt")).unwrap(),
+        "top-level"
+    );
+    assert_eq!(
+        fs::metadata(out.join("deep").join("inner.bin"))
+            .unwrap()
+            .len(),
+        4096
+    );
 }
 
 #[test]

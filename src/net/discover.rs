@@ -243,7 +243,10 @@ impl DiscoveryService {
     async fn collect_destinations(&self) -> Vec<SocketAddr> {
         let mut dests = lan_broadcast_targets(self.udp_port);
         // Multicast group
-        dests.push(SocketAddr::new(std::net::IpAddr::V4(MULTICAST_V4), self.udp_port));
+        dests.push(SocketAddr::new(
+            std::net::IpAddr::V4(MULTICAST_V4),
+            self.udp_port,
+        ));
         // Known peers (clients.json etc.) — unicast announce so discovery survives broken broadcast
         {
             let known = self.known_targets.read().await;

@@ -46,10 +46,11 @@ VM 前提：SSH 可用；用户已登录**控制台会话**；脚本用 `schtask
 
 1. 文本 本机→VM  
 2. 文本 VM→本机  
-3. 图片 本机→VM  
-4. 小文件 本机→VM  
-5. 大文件 本机→VM（`OHMYCOPY_E2E_LARGE_MB`，默认 8）  
-6. 文件夹 本机→VM（`clip_probe set-folder` → OS HDROP）  
+3. 图片位图 本机→VM
+4. 图片文件 本机→VM（`clip_probe set-file probe.png` → OS HDROP；VM 交互会话确认仍为文件列表）
+5. 小文件 本机→VM
+6. 大文件 本机→VM（`OHMYCOPY_E2E_LARGE_MB`，默认 8）
+7. 文件夹 本机→VM（`clip_probe set-folder` → OS HDROP）
 
 也可单独跑：`python scripts\vm_ssh_smoke.py`
 

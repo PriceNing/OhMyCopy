@@ -84,10 +84,21 @@ impl Config {
 
     /// User data directory: `~/.ohmycopy` on Windows and Linux
     /// (e.g. `C:\Users\<name>\.ohmycopy`, `/home/<name>/.ohmycopy`).
+    ///
+    /// `OHMYCOPY_DATA_DIR` is an explicit override intended for portable/test
+    /// deployments.  It keeps config, clients, history, and inbox together; an
+    /// empty value is ignored.
     pub fn config_dir() -> Result<PathBuf> {
+        if let Some(dir) = std::env::var_os("OHMYCOPY_DATA_DIR") {
+            let dir = PathBuf::from(dir);
+            if !dir.as_os_str().is_empty() {
+                fs::create_dir_all(&dir)
+                    .with_context(|| format!("create OHMYCOPY_DATA_DIR {}", dir.display()))?;
+                return Ok(dir);
+            }
+        }
         let dir = home_dir()?.join(".ohmycopy");
-        fs::create_dir_all(&dir)
-            .with_context(|| format!("create config dir {}", dir.display()))?;
+        fs::create_dir_all(&dir).with_context(|| format!("create config dir {}", dir.display()))?;
         Ok(dir)
     }
 
@@ -123,8 +134,8 @@ impl Config {
     }
 
     pub fn load(path: &Path) -> Result<Self> {
-        let text = fs::read_to_string(path)
-            .with_context(|| format!("read config {}", path.display()))?;
+        let text =
+            fs::read_to_string(path).with_context(|| format!("read config {}", path.display()))?;
         let mut cfg: Config = if path
             .extension()
             .and_then(|e| e.to_str())
@@ -242,7 +253,12 @@ impl Config {
         let Ok(dest_dir) = Self::config_dir() else {
             return;
         };
-        for name in ["clients.json", "history.db", "history.db-wal", "history.db-shm"] {
+        for name in [
+            "clients.json",
+            "history.db",
+            "history.db-wal",
+            "history.db-shm",
+        ] {
             let src = from_dir.join(name);
             let dest = dest_dir.join(name);
             if src.is_file() && !dest.exists() {
@@ -259,7 +275,6 @@ impl Config {
             }
         }
     }
-
 
     fn normalize(&mut self) {
         if self.config_version < CONFIG_VERSION {
@@ -393,7 +408,7 @@ pub fn open_path_in_file_manager(path: &Path) -> Result<()> {
             .arg(path)
             .spawn()
             .context("spawn explorer")?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(target_os = "macos")]
     {
@@ -470,15 +485,25 @@ mod hostname {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
     use tempfile::tempdir;
+
+    fn data_dir_env_guard() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
 
     #[test]
     fn roundtrip_config_json() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.json");
-        let mut cfg = Config::default();
-        cfg.device_name = "Test".into();
-        cfg.password = "secret".into();
+        let cfg = Config {
+            device_name: "Test".into(),
+            password: "secret".into(),
+            ..Config::default()
+        };
         let text = serde_json::to_string_pretty(&cfg).unwrap();
         std::fs::write(&path, text).unwrap();
         let loaded = Config::load(&path).unwrap();
@@ -501,9 +526,25 @@ mod tests {
 
     #[test]
     fn config_dir_is_dot_ohmycopy_under_home() {
+        let _guard = data_dir_env_guard();
         let dir = Config::config_dir().unwrap();
         assert!(dir.ends_with(".ohmycopy"), "dir={}", dir.display());
         assert!(dir.is_dir());
+    }
+
+    #[test]
+    fn data_dir_environment_override_is_used() {
+        let _guard = data_dir_env_guard();
+        let dir = tempdir().unwrap();
+        let previous = std::env::var_os("OHMYCOPY_DATA_DIR");
+        unsafe { std::env::set_var("OHMYCOPY_DATA_DIR", dir.path()) };
+        let got = Config::config_dir().unwrap();
+        if let Some(value) = previous {
+            unsafe { std::env::set_var("OHMYCOPY_DATA_DIR", value) };
+        } else {
+            unsafe { std::env::remove_var("OHMYCOPY_DATA_DIR") };
+        }
+        assert_eq!(got, dir.path());
     }
 
     #[test]
@@ -532,9 +573,11 @@ mod tests {
     fn language_field_roundtrip() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.json");
-        let mut cfg = Config::default();
-        cfg.language = "zh_cn".into();
-        cfg.password = "secret".into();
+        let cfg = Config {
+            language: "zh_cn".into(),
+            password: "secret".into(),
+            ..Config::default()
+        };
         std::fs::write(&path, serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
         let loaded = Config::load(&path).unwrap();
         assert_eq!(loaded.language, "zh_cn");
