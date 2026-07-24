@@ -181,6 +181,13 @@ powershell -ExecutionPolicy Bypass -File scripts\package_release.ps1
 # → dist/OhMyCopy-<版本>.zip
 ```
 
+也可以把“完整自动测试 +（可选）虚拟机剪贴板冒烟”与本地打包串成一个工作流：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_auto_tests.ps1 -VmSmoke -RequireVm -PackageLocal
+# → 所有测试通过后才生成 dist/OhMyCopy-<版本>/、zip 和 dist/ohmycopy.exe
+```
+
 **为什么默认看不到 dist 里的 exe？**
 
 1. `cargo build` **只会**写到 `target/release/`，**不会**自动拷到 `dist/`。  

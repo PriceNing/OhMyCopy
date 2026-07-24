@@ -14,13 +14,17 @@
 #   $env:OHMYCOPY_VM_PASSWORD = "..."         # do not commit
 #   powershell -ExecutionPolicy Bypass -File scripts\run_auto_tests.ps1 -VmSmoke
 #
+#   # Full verification followed by a local portable package in dist/
+#   powershell -ExecutionPolicy Bypass -File scripts\run_auto_tests.ps1 -VmSmoke -RequireVm -PackageLocal
+#
 # Exit 0 = all selected tests passed.
 
 param(
     [switch]$VmSmoke,
     [switch]$RemoteVm,   # alias of -VmSmoke
     [switch]$Large,
-    [switch]$RequireVm
+    [switch]$RequireVm,
+    [switch]$PackageLocal # create dist/OhMyCopy-<version>/ and zip after all selected tests pass
 )
 
 $ErrorActionPreference = "Stop"
@@ -69,6 +73,8 @@ OhMyCopy FULL test matrix
     - protocol / settings_and_clients / e2e_sync
   VM OS clipboard (env or -VmSmoke):
     - text L→VM / VM→L, image, file, large file, folder HDROP
+  Local package (-PackageLocal):
+    - portable Windows folder + zip under dist/ (only after all selected tests pass)
 "@ -ForegroundColor Gray
 
 # ----- 1) Full local suite -----
@@ -98,6 +104,11 @@ Write-Host "Local FULL suite PASSED (text/image/file/folder/large + unit)." -For
 
 # ----- 3) VM real clipboard -----
 if (-not $wantVm) {
+    if ($PackageLocal) {
+        Write-Step "local portable package (dist/)"
+        & powershell.exe -ExecutionPolicy Bypass -File (Join-Path $Root "scripts\package_release.ps1") -SkipTests
+        if ($LASTEXITCODE -ne 0) { throw "local package failed (exit $LASTEXITCODE)" }
+    }
     Write-Host "VM smoke SKIPPED (set OHMYCOPY_VM_* or pass -VmSmoke)." -ForegroundColor Yellow
     exit 0
 }
@@ -119,6 +130,16 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+if ($PackageLocal) {
+    Write-Step "local portable package (dist/)"
+    & powershell.exe -ExecutionPolicy Bypass -File (Join-Path $Root "scripts\package_release.ps1") -SkipTests
+    if ($LASTEXITCODE -ne 0) { throw "local package failed (exit $LASTEXITCODE)" }
+}
+
 Write-Host ""
-Write-Host "ALL tests PASSED (local full + VM smoke)." -ForegroundColor Green
+if ($PackageLocal) {
+    Write-Host "ALL tests PASSED and local release package created in dist/." -ForegroundColor Green
+} else {
+    Write-Host "ALL tests PASSED (local full + VM smoke)." -ForegroundColor Green
+}
 exit 0
