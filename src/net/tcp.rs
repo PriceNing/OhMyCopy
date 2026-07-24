@@ -224,7 +224,12 @@ impl NetworkHub {
 
     pub async fn peer_snapshots(&self) -> Vec<PeerSnapshot> {
         let map = self.peers_meta.read().await;
-        let mut v: Vec<_> = map.values().map(|p| p.snapshot()).collect();
+        let live_ids: HashSet<Uuid> = self.live.lock().keys().copied().collect();
+        let connecting_ids = self.connecting.lock().clone();
+        let mut v: Vec<_> = map
+            .values()
+            .map(|p| snapshot_with_live_state(p, &live_ids, &connecting_ids))
+            .collect();
         v.sort_by(|a, b| a.name.cmp(&b.name));
         v
     }
@@ -1293,6 +1298,30 @@ impl NetworkHub {
     }
 }
 
+/// Reconcile display state with the active-session registry. Metadata updates
+/// arrive asynchronously, whereas `live` is mutated on the session path; the
+/// latter therefore wins for the connected / reconnecting label.
+fn snapshot_with_live_state(
+    peer: &PeerInfo,
+    live_ids: &HashSet<Uuid>,
+    connecting_ids: &HashSet<Uuid>,
+) -> PeerSnapshot {
+    let mut snapshot = peer.snapshot();
+    if live_ids.contains(&peer.device_id) {
+        snapshot.status = crate::i18n::t(PeerStatus::Connected.i18n_key());
+        snapshot.status_kind = PeerStatus::Connected;
+        snapshot.connected = true;
+        snapshot.connecting = false;
+        snapshot.last_error = None;
+    } else if connecting_ids.contains(&peer.device_id) {
+        snapshot.status = crate::i18n::t(PeerStatus::Connecting.i18n_key());
+        snapshot.status_kind = PeerStatus::Connecting;
+        snapshot.connected = false;
+        snapshot.connecting = true;
+    }
+    snapshot
+}
+
 /// AuthResponse must match the identity claimed in plaintext Hello.
 fn check_auth_identity(r: &AuthResponse, remote_id: Uuid, remote_name: &str) -> Result<()> {
     if r.device_id != remote_id {
@@ -1402,4 +1431,43 @@ async fn read_message_timeout<R: AsyncReadExt + Unpin>(
     // Handshake messages are small — never allocate multi-hundred-MiB buffers.
     let body = read_raw_timeout_max(r, timeout, |_| timeout, MAX_HANDSHAKE_FRAME_BYTES).await?;
     Ok(Message::decode(&body)?)
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::{snapshot_with_live_state, PeerInfo, PeerStatus};
+    use std::collections::HashSet;
+    use std::net::SocketAddr;
+    use std::time::Instant;
+    use uuid::Uuid;
+
+    fn peer(status: PeerStatus) -> PeerInfo {
+        PeerInfo {
+            device_id: Uuid::from_u128(7),
+            name: "test-peer".into(),
+            addr: "127.0.0.1:3721".parse::<SocketAddr>().unwrap(),
+            status,
+            last_seen: Instant::now(),
+            last_error: Some("stale metadata".into()),
+        }
+    }
+
+    #[test]
+    fn live_session_overrides_stale_reconnecting_metadata() {
+        let p = peer(PeerStatus::Disconnected);
+        let snapshot = snapshot_with_live_state(&p, &HashSet::from([p.device_id]), &HashSet::new());
+        assert_eq!(snapshot.status_kind, PeerStatus::Connected);
+        assert!(snapshot.connected);
+        assert!(!snapshot.connecting);
+        assert!(snapshot.last_error.is_none());
+    }
+
+    #[test]
+    fn in_flight_dial_overrides_stale_disconnected_metadata() {
+        let p = peer(PeerStatus::Disconnected);
+        let snapshot = snapshot_with_live_state(&p, &HashSet::new(), &HashSet::from([p.device_id]));
+        assert_eq!(snapshot.status_kind, PeerStatus::Connecting);
+        assert!(!snapshot.connected);
+        assert!(snapshot.connecting);
+    }
 }

@@ -87,6 +87,9 @@ pub struct ClipboardService {
 
 struct SuppressState {
     fingerprint: String,
+    /// Retained for a synced file list so that a Windows Shell `file://`
+    /// intermediary can be repaired back into a real `CF_HDROP` list.
+    files: Option<Vec<PathBuf>>,
     /// File lists can transiently appear as file:// URI text on Windows. Keep
     /// their guard alive for this bounded window even if that intermediate form
     /// is observed before CF_HDROP.
@@ -135,7 +138,8 @@ impl ClipboardService {
     fn mark_suppress_fp(&self, fp: String) {
         *self.suppress.lock() = Some(SuppressState {
             fingerprint: fp,
-            expires_at: Instant::now() + Duration::from_secs(3),
+            files: None,
+            expires_at: Instant::now() + Duration::from_secs(10),
         });
     }
 
@@ -191,7 +195,14 @@ impl ClipboardService {
     }
 
     pub fn set_files_from_sync(&self, paths: &[PathBuf]) -> Result<()> {
-        self.mark_suppress_fp(ClipContent::Files(paths.to_vec()).fingerprint());
+        *self.suppress.lock() = Some(SuppressState {
+            fingerprint: ClipContent::Files(paths.to_vec()).fingerprint(),
+            files: Some(paths.to_vec()),
+            // Windows Shell can publish the URI conversion more than one poll
+            // after CF_HDROP was observed. Keep the repair guard long enough
+            // to cover that delayed conversion.
+            expires_at: Instant::now() + Duration::from_secs(10),
+        });
         self.set_files_inner(paths, true)
     }
 
@@ -270,12 +281,25 @@ impl ClipboardService {
     /// Only the matching fingerprint is consumed; a later different copy still fires.
     pub fn take_suppress_for(&self, fp: &str) -> bool {
         let mut g = self.suppress.lock();
-        if g.as_ref().is_some_and(|s| s.fingerprint == fp) {
+        let Some(state) = g.as_ref() else {
+            return false;
+        };
+        if Instant::now() >= state.expires_at {
             *g = None;
-            true
-        } else {
-            false
+            return false;
         }
+        if state.fingerprint != fp {
+            return false;
+        }
+
+        // A file list needs to remain guarded after its first CF_HDROP
+        // observation. Windows may subsequently expose it as a file:// text
+        // rendering; clearing here was the reason that rendering escaped as a
+        // new text event and overwrote the file clipboard.
+        if state.files.is_none() {
+            *g = None;
+        }
+        true
     }
 
     /// Keep suppressing a synced file-list until the watcher actually observes
@@ -292,7 +316,51 @@ impl ClipboardService {
             *guard = None;
             return false;
         }
-        state.fingerprint.starts_with("f:")
+        state.files.is_some()
+    }
+
+    /// Remember a file list that the watcher has just observed.  This applies
+    /// to *local* Explorer copies too: Windows Shell may later replace the
+    /// visible clipboard representation with `file://` text, in which case we
+    /// must restore the original CF_HDROP list instead of losing local paste.
+    pub fn retain_observed_files(&self, paths: &[PathBuf]) {
+        let fp = ClipContent::Files(paths.to_vec()).fingerprint();
+        let mut guard = self.suppress.lock();
+        if let Some(state) = guard.as_mut() {
+            if state.fingerprint == fp && state.files.is_some() {
+                state.expires_at = Instant::now() + Duration::from_secs(10);
+                return;
+            }
+        }
+        *guard = Some(SuppressState {
+            fingerprint: fp,
+            files: Some(paths.to_vec()),
+            expires_at: Instant::now() + Duration::from_secs(10),
+        });
+    }
+
+    /// Repair Windows Shell's occasional conversion of a received CF_HDROP
+    /// entry into plain `file://` text. This intentionally re-writes the file
+    /// list, so Explorer and other local targets retain a pasteable file.
+    pub fn restore_suppressed_files(&self) -> Result<bool> {
+        let paths = {
+            let mut guard = self.suppress.lock();
+            let Some(state) = guard.as_mut() else {
+                return Ok(false);
+            };
+            if Instant::now() >= state.expires_at {
+                *guard = None;
+                return Ok(false);
+            }
+            let Some(paths) = state.files.clone() else {
+                return Ok(false);
+            };
+            // Start a new bounded period after the corrective write.
+            state.expires_at = Instant::now() + Duration::from_secs(10);
+            paths
+        };
+        self.set_files_inner(&paths, true)?;
+        Ok(true)
     }
 
     /// Backward-compatible: clear any pending suppress (e.g. tests / probe).
@@ -366,6 +434,7 @@ fn clipboard_thread(rx: Receiver<ClipRequest>, suppress: Arc<Mutex<Option<Suppre
                 if from_sync {
                     *suppress.lock() = Some(SuppressState {
                         fingerprint: ClipContent::Text(text.clone()).fingerprint(),
+                        files: None,
                         expires_at: Instant::now() + Duration::from_secs(3),
                     });
                 }
@@ -390,7 +459,8 @@ fn clipboard_thread(rx: Receiver<ClipRequest>, suppress: Arc<Mutex<Option<Suppre
                 if from_sync {
                     *suppress.lock() = Some(SuppressState {
                         fingerprint: ClipContent::Files(paths.clone()).fingerprint(),
-                        expires_at: Instant::now() + Duration::from_secs(3),
+                        files: Some(paths.clone()),
+                        expires_at: Instant::now() + Duration::from_secs(10),
                     });
                 }
                 let result = set_files_resilient(&mut clipboard, &paths);
@@ -414,6 +484,7 @@ fn clipboard_thread(rx: Receiver<ClipRequest>, suppress: Arc<Mutex<Option<Suppre
                             rgba: rgba.clone(),
                         }
                         .fingerprint(),
+                        files: None,
                         expires_at: Instant::now() + Duration::from_secs(3),
                     });
                 }
@@ -834,16 +905,38 @@ pub fn spawn_clipboard_watcher(
                     crate::audit::record(format!("clipboard_change suppressed fingerprint={fp}"));
                     continue;
                 }
-                if matches!(&current, ClipContent::Text(text) if is_file_uri_list(text))
-                    && service.has_file_suppress_pending()
-                {
+                let file_intermediate = matches!(&current, ClipContent::Text(text) if is_file_uri_list(text));
+                // Explorer can expose a copied image *file* in several delayed
+                // representations: first CF_HDROP, then file:// text, and on
+                // some systems a bitmap/DIB. Once a file list was observed,
+                // all of those follow-up representations belong to the same
+                // copy operation; do not turn it into a new text/image event
+                // or overwrite the pasteable file list.
+                let image_intermediate = matches!(&current, ClipContent::Image { .. });
+                if (file_intermediate || image_intermediate) && service.has_file_suppress_pending() {
+                    match service.restore_suppressed_files() {
+                        Ok(true) => crate::audit::record(format!(
+                            "clipboard_change restored_file_hdrop_after_intermediate kind={} fingerprint={fp}",
+                            if file_intermediate { "file_uri" } else { "image" },
+                        )),
+                        Ok(false) => {}
+                        Err(e) => tracing::warn!(error = %e, "restore file clipboard after intermediate representation"),
+                    }
                     crate::audit::record(format!(
-                        "clipboard_change suppressed_file_uri_intermediate fingerprint={fp}"
+                        "clipboard_change suppressed_file_intermediate kind={} fingerprint={fp}",
+                        if file_intermediate { "file_uri" } else { "image" },
                     ));
                     continue;
                 }
                 if matches!(current, ClipContent::Empty) {
                     continue;
+                }
+                if let ClipContent::Files(paths) = &current {
+                    // Arm the repair guard before notifying the application.
+                    // This covers both local Explorer copies and received
+                    // files, and leaves the subsequent URI conversion unable
+                    // to replace the pasteable CF_HDROP state.
+                    service.retain_observed_files(paths);
                 }
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     on_change(current);
@@ -1164,7 +1257,14 @@ pub fn content_looks_like_absolute_path(s: &str) -> bool {
 
 #[cfg(test)]
 mod path_heuristic_tests {
-    use super::{content_looks_like_absolute_path, is_file_uri_list};
+    use super::{
+        content_looks_like_absolute_path, is_file_uri_list, ClipContent, ClipboardService,
+        SuppressState,
+    };
+    use parking_lot::Mutex;
+    use std::path::PathBuf;
+    use std::sync::{mpsc, Arc};
+    use std::time::{Duration, Instant};
 
     #[test]
     fn bare_filename_is_not_path() {
@@ -1191,6 +1291,55 @@ mod path_heuristic_tests {
         assert!(is_file_uri_list("file:///C:/a.txt\r\nfile:///C:/b.txt\r\n"));
         assert!(!is_file_uri_list("file:///C:/a.txt\nnotes"));
         assert!(!is_file_uri_list("ordinary text"));
+    }
+
+    #[test]
+    fn synced_file_guard_survives_first_hdrop_observation() {
+        let paths = vec![PathBuf::from(r"C:\Users\NRC\.ohmycopy\inbox\a.exe")];
+        let state = SuppressState {
+            fingerprint: ClipContent::Files(paths.clone()).fingerprint(),
+            files: Some(paths),
+            expires_at: Instant::now() + Duration::from_secs(1),
+        };
+        let service = ClipboardService {
+            // This test only exercises the suppression state; sending requests
+            // through the unused channel is intentionally unnecessary.
+            tx: mpsc::sync_channel(1).0,
+            suppress: Arc::new(Mutex::new(Some(state))),
+        };
+        let fp = ClipContent::Files(vec![PathBuf::from(r"C:\Users\NRC\.ohmycopy\inbox\a.exe")])
+            .fingerprint();
+        assert!(service.take_suppress_for(&fp));
+        assert!(service.has_file_suppress_pending());
+    }
+
+    #[test]
+    fn observed_local_file_guard_blocks_the_later_uri_conversion() {
+        let paths = vec![PathBuf::from(r"C:\Users\NRC\Desktop\a.exe")];
+        let service = ClipboardService {
+            tx: mpsc::sync_channel(1).0,
+            suppress: Arc::new(Mutex::new(None)),
+        };
+        service.retain_observed_files(&paths);
+        assert!(service.has_file_suppress_pending());
+        assert!(is_file_uri_list("file:///C:/Users/NRC/Desktop/a.exe"));
+    }
+
+    #[test]
+    fn observed_file_guard_is_active_for_a_later_bitmap_representation() {
+        let paths = vec![PathBuf::from(r"C:\Users\NRC\Desktop\NRCPC.png")];
+        let service = ClipboardService {
+            tx: mpsc::sync_channel(1).0,
+            suppress: Arc::new(Mutex::new(None)),
+        };
+        service.retain_observed_files(&paths);
+        let delayed_bitmap = ClipContent::Image {
+            width: 1386,
+            height: 1013,
+            rgba: vec![0; 4],
+        };
+        assert!(matches!(delayed_bitmap, ClipContent::Image { .. }));
+        assert!(service.has_file_suppress_pending());
     }
 }
 

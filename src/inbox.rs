@@ -60,7 +60,10 @@ pub fn sanitize_name(name: &str) -> String {
             }
         })
         .collect();
-    let s = s.trim().trim_matches('.');
+    // Windows rejects trailing dots/spaces, but a leading dot is a legitimate
+    // filename character (for example `.cargo-artifact-lock`). Preserve it so
+    // hidden/config files keep their exact name after synchronization.
+    let s = s.trim().trim_end_matches('.');
     if s.is_empty() {
         "item".into()
     } else {
@@ -566,6 +569,28 @@ mod tests {
         assert_eq!(n, 2);
         assert!(inbox.is_dir());
         assert!(fs::read_dir(&inbox).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn sanitize_name_preserves_leading_dot_for_hidden_files() {
+        assert_eq!(
+            sanitize_name(".cargo-artifact-lock"),
+            ".cargo-artifact-lock"
+        );
+        assert_eq!(sanitize_name(" .env "), ".env");
+        assert_eq!(sanitize_name("file..."), "file");
+        assert_eq!(sanitize_name("..."), "item");
+    }
+
+    #[test]
+    fn pack_path_preserves_hidden_file_name_on_the_wire() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".cargo-artifact-lock");
+        fs::write(&path, b"lock").unwrap();
+        let (name, bytes, mime) = pack_path(&path, 1024).unwrap();
+        assert_eq!(name, ".cargo-artifact-lock");
+        assert_eq!(bytes, b"lock");
+        assert_eq!(mime, "application/octet-stream");
     }
 
     #[test]
