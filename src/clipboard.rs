@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Snapshot of what we care about on the system clipboard.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,7 +82,15 @@ pub struct ClipboardService {
     /// Fingerprint of content we just wrote from a remote sync. Watcher must only
     /// ignore a change that matches this fingerprint — a broad "suppress next"
     /// flag can swallow a *later* real user copy if the sync poll is delayed.
-    suppress_fp: Arc<Mutex<Option<String>>>,
+    suppress: Arc<Mutex<Option<SuppressState>>>,
+}
+
+struct SuppressState {
+    fingerprint: String,
+    /// File lists can transiently appear as file:// URI text on Windows. Keep
+    /// their guard alive for this bounded window even if that intermediate form
+    /// is observed before CF_HDROP.
+    expires_at: Instant,
 }
 
 /// The Win32 clipboard is scoped to an interactive desktop.  Clipboard writes
@@ -113,23 +121,26 @@ fn attach_to_input_desktop() {}
 impl ClipboardService {
     pub fn new() -> Result<Self> {
         let (tx, rx) = mpsc::sync_channel::<ClipRequest>(32);
-        let suppress_fp = Arc::new(Mutex::new(None));
-        let suppress_flag = Arc::clone(&suppress_fp);
+        let suppress = Arc::new(Mutex::new(None));
+        let suppress_flag = Arc::clone(&suppress);
 
         thread::Builder::new()
             .name("ohmycopy-clipboard".into())
             .spawn(move || clipboard_thread(rx, suppress_flag))
             .context("spawn clipboard thread")?;
 
-        Ok(Self { tx, suppress_fp })
+        Ok(Self { tx, suppress })
     }
 
     fn mark_suppress_fp(&self, fp: String) {
-        *self.suppress_fp.lock() = Some(fp);
+        *self.suppress.lock() = Some(SuppressState {
+            fingerprint: fp,
+            expires_at: Instant::now() + Duration::from_secs(3),
+        });
     }
 
     fn clear_suppress_fp(&self) {
-        *self.suppress_fp.lock() = None;
+        *self.suppress.lock() = None;
     }
 
     pub fn get(&self) -> Result<ClipContent> {
@@ -258,8 +269,8 @@ impl ClipboardService {
     /// Returns true if `fp` is the fingerprint of a remote sync write we should ignore.
     /// Only the matching fingerprint is consumed; a later different copy still fires.
     pub fn take_suppress_for(&self, fp: &str) -> bool {
-        let mut g = self.suppress_fp.lock();
-        if g.as_deref() == Some(fp) {
+        let mut g = self.suppress.lock();
+        if g.as_ref().is_some_and(|s| s.fingerprint == fp) {
             *g = None;
             true
         } else {
@@ -267,9 +278,26 @@ impl ClipboardService {
         }
     }
 
+    /// Keep suppressing a synced file-list until the watcher actually observes
+    /// the corresponding `CF_HDROP` clipboard state.  Some Windows clipboard
+    /// consumers briefly expose the path as `file:///...` text while resolving
+    /// the shell file-list format; that intermediate representation must not be
+    /// broadcast as a new text event.
+    pub fn has_file_suppress_pending(&self) -> bool {
+        let mut guard = self.suppress.lock();
+        let Some(state) = guard.as_ref() else {
+            return false;
+        };
+        if Instant::now() >= state.expires_at {
+            *guard = None;
+            return false;
+        }
+        state.fingerprint.starts_with("f:")
+    }
+
     /// Backward-compatible: clear any pending suppress (e.g. tests / probe).
     pub fn take_suppress(&self) -> bool {
-        self.suppress_fp.lock().take().is_some()
+        self.suppress.lock().take().is_some()
     }
 }
 
@@ -311,7 +339,7 @@ pub fn png_to_rgba(png: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
     Ok((w, h, img.into_raw()))
 }
 
-fn clipboard_thread(rx: Receiver<ClipRequest>, suppress_fp: Arc<Mutex<Option<String>>>) {
+fn clipboard_thread(rx: Receiver<ClipRequest>, suppress: Arc<Mutex<Option<SuppressState>>>) {
     attach_to_input_desktop();
     // Keep Option so we can re-open after X11 disconnect / unreachable DISPLAY.
     let mut clipboard: Option<Clipboard> = open_clipboard_handle();
@@ -336,7 +364,10 @@ fn clipboard_thread(rx: Receiver<ClipRequest>, suppress_fp: Arc<Mutex<Option<Str
                 reply,
             } => {
                 if from_sync {
-                    *suppress_fp.lock() = Some(ClipContent::Text(text.clone()).fingerprint());
+                    *suppress.lock() = Some(SuppressState {
+                        fingerprint: ClipContent::Text(text.clone()).fingerprint(),
+                        expires_at: Instant::now() + Duration::from_secs(3),
+                    });
                 }
                 let result = set_text_resilient(&mut clipboard, &text);
                 if let Err(e) = &result {
@@ -347,7 +378,7 @@ fn clipboard_thread(rx: Receiver<ClipRequest>, suppress_fp: Arc<Mutex<Option<Str
                     }
                 }
                 if result.is_err() && from_sync {
-                    *suppress_fp.lock() = None;
+                    *suppress.lock() = None;
                 }
                 let _ = reply.send(result);
             }
@@ -357,11 +388,14 @@ fn clipboard_thread(rx: Receiver<ClipRequest>, suppress_fp: Arc<Mutex<Option<Str
                 reply,
             } => {
                 if from_sync {
-                    *suppress_fp.lock() = Some(ClipContent::Files(paths.clone()).fingerprint());
+                    *suppress.lock() = Some(SuppressState {
+                        fingerprint: ClipContent::Files(paths.clone()).fingerprint(),
+                        expires_at: Instant::now() + Duration::from_secs(3),
+                    });
                 }
                 let result = set_files_resilient(&mut clipboard, &paths);
                 if result.is_err() && from_sync {
-                    *suppress_fp.lock() = None;
+                    *suppress.lock() = None;
                 }
                 let _ = reply.send(result);
             }
@@ -373,14 +407,15 @@ fn clipboard_thread(rx: Receiver<ClipRequest>, suppress_fp: Arc<Mutex<Option<Str
                 reply,
             } => {
                 if from_sync {
-                    *suppress_fp.lock() = Some(
-                        ClipContent::Image {
+                    *suppress.lock() = Some(SuppressState {
+                        fingerprint: ClipContent::Image {
                             width,
                             height,
                             rgba: rgba.clone(),
                         }
                         .fingerprint(),
-                    );
+                        expires_at: Instant::now() + Duration::from_secs(3),
+                    });
                 }
                 let result = set_image_resilient(&mut clipboard, width, height, &rgba);
                 if let Err(e) = &result {
@@ -390,7 +425,7 @@ fn clipboard_thread(rx: Receiver<ClipRequest>, suppress_fp: Arc<Mutex<Option<Str
                     }
                 }
                 if result.is_err() && from_sync {
-                    *suppress_fp.lock() = None;
+                    *suppress.lock() = None;
                 }
                 let _ = reply.send(result);
             }
@@ -799,6 +834,14 @@ pub fn spawn_clipboard_watcher(
                     crate::audit::record(format!("clipboard_change suppressed fingerprint={fp}"));
                     continue;
                 }
+                if matches!(&current, ClipContent::Text(text) if is_file_uri_list(text))
+                    && service.has_file_suppress_pending()
+                {
+                    crate::audit::record(format!(
+                        "clipboard_change suppressed_file_uri_intermediate fingerprint={fp}"
+                    ));
+                    continue;
+                }
                 if matches!(current, ClipContent::Empty) {
                     continue;
                 }
@@ -811,6 +854,20 @@ pub fn spawn_clipboard_watcher(
             tracing::error!(error = %e, "failed to spawn clipboard watcher");
             thread::spawn(|| {})
         })
+}
+
+/// True for the shell's textual rendering of a clipboard file list.  It is not
+/// user-authored text in the sync path and should never replace the preceding
+/// `CF_HDROP` content while a synced file-list write is still pending.
+fn is_file_uri_list(text: &str) -> bool {
+    let mut found = false;
+    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if !line.to_ascii_lowercase().starts_with("file://") {
+            return false;
+        }
+        found = true;
+    }
+    found
 }
 
 // --- Platform: file list on clipboard ---
@@ -1107,7 +1164,7 @@ pub fn content_looks_like_absolute_path(s: &str) -> bool {
 
 #[cfg(test)]
 mod path_heuristic_tests {
-    use super::content_looks_like_absolute_path;
+    use super::{content_looks_like_absolute_path, is_file_uri_list};
 
     #[test]
     fn bare_filename_is_not_path() {
@@ -1126,6 +1183,14 @@ mod path_heuristic_tests {
     fn absolute_windows_path_is_path() {
         assert!(content_looks_like_absolute_path(r"C:\Users\a\b.txt"));
         assert!(content_looks_like_absolute_path("D:/data/file.bin"));
+    }
+
+    #[test]
+    fn file_uri_list_detection_is_strict() {
+        assert!(is_file_uri_list("file:///C:/Users/NRC/a.exe"));
+        assert!(is_file_uri_list("file:///C:/a.txt\r\nfile:///C:/b.txt\r\n"));
+        assert!(!is_file_uri_list("file:///C:/a.txt\nnotes"));
+        assert!(!is_file_uri_list("ordinary text"));
     }
 }
 

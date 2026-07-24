@@ -598,9 +598,29 @@ if (Test-Path '{REMOTE_DIR}\probe_image_file_kind.txt') {{ Get-Content '{REMOTE_
                 check=False,
             )
             if "files 1" in file_kind.lower() and image_file_name.lower() in file_kind.lower():
-                print(f"  VM clipboard reports a file list at {i}s")
-                ok = True
-                break
+                # Shell may briefly expose a received CF_HDROP item as a
+                # `file:///...` text representation. Verify it remains a real
+                # file list after the watcher had time to observe that state.
+                time.sleep(4)
+                stable_kind = ps(
+                    c,
+                    rf"""
+$bat = @'
+@echo off
+C:\OhMyCopyE2E\clip_probe.exe get-kind > C:\OhMyCopyE2E\probe_image_file_kind.txt 2>&1
+'@
+Set-Content -Path '{REMOTE_DIR}\run_probe_image_file.bat' -Value $bat -Encoding ASCII
+schtasks /Run /TN OhMyCopyProbeImageFile | Out-Null
+Start-Sleep -Seconds 2
+if (Test-Path '{REMOTE_DIR}\probe_image_file_kind.txt') {{ Get-Content '{REMOTE_DIR}\probe_image_file_kind.txt' -Raw }} else {{ 'MISSING' }}
+""",
+                    check=False,
+                )
+                if "files 1" in stable_kind.lower() and image_file_name.lower() in stable_kind.lower():
+                    print(f"  VM clipboard reports a stable file list at {i}s")
+                    ok = True
+                    break
+                file_kind = stable_kind
         if not ok:
             print("  VM clipboard probe:", file_kind.strip())
 

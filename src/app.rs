@@ -1163,7 +1163,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                 }
                             } else {
                                 // Prefer real file-list MIME; if OS rejects, fall back to path text.
-                                match clip.set_files_from_sync(std::slice::from_ref(&path)) {
+                                match clip.set_files_local(std::slice::from_ref(&path)) {
                                     Ok(()) => Ok(ohmycopy::i18n::t("toast.copied")),
                                     Err(e) => {
                                         tracing::warn!(
@@ -1176,7 +1176,7 @@ pub fn run_with_config(cfg_snap: Config, force_headless: bool) -> Result<()> {
                                 }
                             }
                         } else if as_path && path.is_dir() {
-                            match clip.set_files_from_sync(&[path]) {
+                            match clip.set_files_local(&[path]) {
                                 Ok(()) => Ok(ohmycopy::i18n::t("toast.copied")),
                                 Err(e) => {
                                     tracing::warn!(
