@@ -1425,12 +1425,16 @@ fn viewport_builder(start_minimized_to_tray: bool) -> egui::ViewportBuilder {
         vb = vb.with_icon(icon);
     }
     if start_minimized_to_tray {
-        // Reduce first-frame flash on Windows: invisible, not focused, no taskbar,
-        // and create far off-screen until we hide via Win32.
+        // Reduce first-frame flash on Windows: create the main window hidden and
+        // off-screen until the tray takes over.  Do *not* opt out of the taskbar
+        // at window creation: that native style is sticky on Windows and would
+        // keep a later restored window out of Alt+Tab / the taskbar as well.
+        // A hidden regular window naturally has no taskbar button; once restored
+        // it behaves like an ordinary app window and its `—` button minimizes to
+        // the taskbar.
         vb = vb
             .with_visible(false)
             .with_active(false)
-            .with_taskbar(false)
             .with_position(egui::pos2(-32000.0, -32000.0));
     }
     vb

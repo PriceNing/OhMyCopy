@@ -12,7 +12,7 @@
 
 仓库：<https://github.com/PriceNing/OhMyCopy>
 
-## 功能状态（v0.1.43）
+## 功能状态（v0.1.44）
 
 | 能力 | 状态 |
 |------|------|
@@ -131,7 +131,7 @@ Linux:    ~/.ohmycopy/
 | 字段 | 说明 |
 |------|------|
 | `console` | `false`（默认）不弹黑框；需要日志时设 `true` |
-| `start_minimized_to_tray` | `true` 时启动仅托盘 |
+| `start_minimized_to_tray` | `true` 时启动仅托盘；从托盘恢复后，`—` 最小化到任务栏，`×` 隐藏回托盘 |
 | `auto_start` | `true` 时写入当前用户开机/登录启动项（设置里勾选并保存） |
 | `max_payload_bytes` | 默认 10MiB，可在设置中提高（大文件需两端一致） |
 | `sync_enabled` | 暂停/恢复同步 |
